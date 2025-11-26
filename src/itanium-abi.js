@@ -340,6 +340,54 @@ function getBasicTypeName(typeCode) {
 }
 
 /**
+ * Parses array types (A<size>_<element-type>)
+ * @param {string} str - String after 'A'
+ * @param {Array} substitutions - Array of substitutions for back-references
+ * @param {Array} templateParams - Template parameter types
+ * @returns {{typeStr: string, str: string}} The parsed array type and remaining string
+ */
+function parseArrayType(str, substitutions = [], templateParams = []) {
+	// Parse the array size (number before underscore)
+	const sizeMatch = /^(\d+)_/.exec(str);
+	if (!sizeMatch) {
+		return { typeStr: '', str: str };
+	}
+
+	const size = sizeMatch[1];
+	let remaining = str.slice(sizeMatch[0].length);
+
+	// Parse the element type recursively
+	const { typeInfo, remaining: afterType } = parseSingleType(
+		remaining,
+		[],
+		0,
+		[],
+		substitutions,
+		templateParams
+	);
+
+	if (!typeInfo) {
+		return { typeStr: '', str: str };
+	}
+
+	// Format as type[size]
+	// For nested arrays, we need to insert the new dimension before existing dimensions
+	const elementType = formatTypeInfo(typeInfo);
+	
+	// Check if element type is already an array (contains '[')
+	const arrayMatch = /^(.+?)(\[.+\])$/.exec(elementType);
+	if (arrayMatch) {
+		// Insert new dimension before existing dimensions: baseType[size][existingDims]
+		const arrayType = `${arrayMatch[1]}[${size}]${arrayMatch[2]}`;
+		return { typeStr: arrayType, str: afterType };
+	} else {
+		// Simple case: just append [size]
+		const arrayType = `${elementType}[${size}]`;
+		return { typeStr: arrayType, str: afterType };
+	}
+}
+
+/**
  * Parses template parameter references (T_, T0_, T1_, etc.)
  * @param {string} str - String after 'T'
  * @param {Array} templateParams - Array of template parameter type infos
@@ -689,6 +737,16 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 	if (basicType) {
 		typeInfo.typeStr = basicType;
 		return new ParseResult(typeInfo, remainingAfterQualifiers, templateDepth, templateStack);
+	}
+
+	// Try array type (A<size>_<type>)
+	if (currentChar === 'A') {
+		const arrayResult = parseArrayType(remainingAfterQualifiers, substitutions, templateParams);
+		if (arrayResult.typeStr) {
+			Object.assign(typeInfo, qualifierResult.qualifiers);
+			typeInfo.typeStr = arrayResult.typeStr;
+			return new ParseResult(typeInfo, arrayResult.str, templateDepth, templateStack);
+		}
 	}
 
 	// Try template parameter placeholder (T_, T0_, T1_, etc.)

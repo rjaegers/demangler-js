@@ -686,13 +686,13 @@ describe('template functions', () => {
 });
 
 describe('array types', () => {
-	it.skip('handles simple array (requires array type support)', (done) => {
+	it('handles simple array', (done) => {
 		assert.equal(itanium_abi.demangle("_Z9testArrayA10_i"), "testArray(int[10])");
 		done();
 	});
 
-	it.skip('handles multidimensional arrays (requires array type support)', (done) => {
-		assert.equal(itanium_abi.demangle("_Z9test2DArrayA10_A20_i"), "test2DArray(int[10][20])");
+	it('handles multidimensional arrays', (done) => {
+		assert.equal(itanium_abi.demangle("_Z11test2DArrayA10_A20_i"), "test2DArray(int[10][20])");
 		done();
 	});
 });
