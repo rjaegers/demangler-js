@@ -249,3 +249,10 @@ describe('std types', () => {
 		done();
 	});
 });
+
+describe('complex types', () => {
+	it('demangles templated type in anonymous namespace', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN12_GLOBAL__N_128gtest_suite_PrimeTableTest2_24ReturnsFalseForNonPrimesI18OnTheFlyPrimeTableE8TestBodyEv"), "(anonymous namespace)::gtest_suite_PrimeTableTest2_::ReturnsFalseForNonPrimes<OnTheFlyPrimeTable>::TestBody(void)");
+		done();
+	});
+});
