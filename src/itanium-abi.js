@@ -124,21 +124,6 @@ function parseNameSegment(str, className = '') {
 }
 
 /**
- * Checks if there are more segments to parse in a name
- * @param {string} str - The remaining string
- * @param {boolean} isEntity - Whether this is an entity (has 'E' terminator)
- * @returns {boolean} True if more segments follow
- */
-function hasMoreSegments(str, isEntity) {
-	if (!isEntity || !str.length) {
-		return false;
-	}
-
-	const firstChar = str[0];
-	return firstChar !== 'E' && firstChar !== 'I' && /\d/.test(firstChar);
-}
-
-/**
  * Checks if string starts with std:: marker
  * @param {string} str - String to check
  * @returns {boolean} True if starts with St marker
@@ -355,6 +340,37 @@ function getBasicTypeName(typeCode) {
 }
 
 /**
+ * Parses template parameter references (T_, T0_, T1_, etc.)
+ * @param {string} str - String after 'T'
+ * @param {Array} templateParams - Array of template parameter type infos
+ * @returns {{typeStr: string, str: string}} The parsed type and remaining string
+ */
+function parseTemplateParam(str, templateParams = []) {
+	const firstChar = str[0];
+
+	// T_ = first template parameter (index 0)
+	if (firstChar === '_') {
+		if (templateParams.length > 0) {
+			return { typeStr: formatTypeInfo(templateParams[0]), str: str.slice(1) };
+		}
+		return { typeStr: '', str: str.slice(1) };
+	}
+
+	// T0_ = first (same as T_), T1_ = second, T2_ = third, etc.
+	const match = /^(\d+)_/.exec(str);
+	if (match) {
+		const index = parseInt(match[1], 10);
+		if (index < templateParams.length) {
+			return { typeStr: formatTypeInfo(templateParams[index]), str: str.slice(match[0].length) };
+		}
+		return { typeStr: '', str: str.slice(match[0].length) };
+	}
+
+	// Not a valid template parameter reference
+	return { typeStr: '', str: str };
+}
+
+/**
  * Parses std:: abbreviated types and substitutions (S-codes)
  * @param {string} str - String starting after 'S'
  * @param {Array} substitutions - Array of previously seen types/names for substitutions
@@ -437,6 +453,11 @@ module.exports = {
 		const functionName = functionNameResult.name;
 		const isConst = functionNameResult.isConst || false;
 
+		// Parse template parameters if present (I...E section after function name)
+		const templateResult = parseTemplatePlaceholders(functionNameResult.str);
+		const templateParams = templateResult.templateParams;
+		let remainingAfterTemplate = templateResult.str;
+
 		// Build substitution list: for member functions, the class/namespace is the first substitution
 		const substitutions = [];
 		if (functionName.includes('::')) {
@@ -446,8 +467,28 @@ module.exports = {
 			substitutions.push(className);
 		}
 
+		// Template parameters themselves become substitution candidates
+		if (templateParams.length > 0) {
+			for (const param of templateParams) {
+				substitutions.push(formatTypeInfo(param));
+			}
+		}
+
+		// For function templates, skip the return type (it comes after template params but before parameter types)
+		if (templateParams.length > 0 && remainingAfterTemplate.length > 0) {
+			const { remaining: afterReturnType } = parseSingleType(
+				remainingAfterTemplate,
+				[],
+				0,
+				[],
+				substitutions,
+				templateParams
+			);
+			remainingAfterTemplate = afterReturnType;
+		}
+
 		// Process the types
-		const parseResult = parseTypeList(functionNameResult.str, substitutions);
+		const parseResult = parseTypeList(remainingAfterTemplate, substitutions, templateParams);
 		const types = parseResult.types;
 
 		// Serialize types with proper template context awareness
@@ -464,12 +505,51 @@ module.exports = {
 };
 
 /**
+ * Parses template parameters from I...E section
+ * @param {string} str - The string potentially starting with 'I'
+ * @returns {{templateParams: Array, str: string}} Template parameter types and remaining string
+ */
+function parseTemplatePlaceholders(str) {
+	if (str[0] !== 'I') {
+		return { templateParams: [], str: str };
+	}
+
+	const templateParams = [];
+	let remaining = str.slice(1); // Skip 'I'
+	const tempSubstitutions = [];
+
+	// Parse types until we hit 'E'
+	while (remaining.length > 0 && remaining[0] !== 'E') {
+		const { typeInfo, remaining: newRemaining } = parseSingleType(
+			remaining,
+			[],
+			0,
+			[],
+			tempSubstitutions
+		);
+
+		if (typeInfo) {
+			templateParams.push(typeInfo);
+		}
+		remaining = newRemaining;
+	}
+
+	// Skip the closing 'E'
+	if (remaining[0] === 'E') {
+		remaining = remaining.slice(1);
+	}
+
+	return { templateParams, str: remaining };
+}
+
+/**
  * Parses the type list from the encoding
  * @param {string} encoding - The type encoding string
  * @param {Array} substitutions - Array of substitutions for back-references
+ * @param {Array} templateParams - Template parameter types for T_, T0_, T1_, etc.
  * @returns {{types: Array}} Parsed types
  */
-function parseTypeList(encoding, substitutions = []) {
+function parseTypeList(encoding, substitutions = [], templateParams = []) {
 	const types = [];
 	let remainingEncoding = encoding;
 	let templateDepth = 0;
@@ -481,11 +561,17 @@ function parseTypeList(encoding, substitutions = []) {
 			types,
 			templateDepth,
 			templateStack,
-			substitutions
+			substitutions,
+			templateParams
 		);
 
 		if (typeInfo) {
 			types.push(typeInfo);
+			// Add the complete type (with qualifiers) to substitutions for future references
+			// But skip template markers
+			if (!typeInfo.templateStart && !typeInfo.templateEnd) {
+				substitutions.push(formatTypeInfo(typeInfo));
+			}
 		}
 
 		remainingEncoding = remaining;
@@ -579,7 +665,7 @@ function handleTemplateClose(remaining, templateDepth, templateStack) {
  * @param {Array} substitutions - Array of substitutions for back-references
  * @returns {ParseResult} Parse result with typeInfo and remaining string
  */
-function parseSingleType(encoding, types, templateDepth, templateStack, substitutions = []) {
+function parseSingleType(encoding, types, templateDepth, templateStack, substitutions = [], templateParams = []) {
 	// Parse type qualifiers first
 	const qualifierResult = parseTypeQualifiers(encoding);
 	const currentChar = qualifierResult.str[0];
@@ -603,6 +689,17 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 	if (basicType) {
 		typeInfo.typeStr = basicType;
 		return new ParseResult(typeInfo, remainingAfterQualifiers, templateDepth, templateStack);
+	}
+
+	// Try template parameter placeholder (T_, T0_, T1_, etc.)
+	if (currentChar === 'T') {
+		const templateResult = parseTemplateParam(remainingAfterQualifiers, templateParams);
+		if (templateResult.typeStr) {
+			typeInfo.typeStr = templateResult.typeStr;
+			// Don't add T_ resolution to substitutions - the template params are already there
+			// The QUALIFIED type (e.g., RT_ = int&) will be added later if needed
+			return new ParseResult(typeInfo, templateResult.str, templateDepth, templateStack);
+		}
 	}
 
 	// Try std abbreviated type or substitution

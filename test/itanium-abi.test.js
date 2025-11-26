@@ -674,12 +674,12 @@ describe('static and const qualifiers', () => {
 });
 
 describe('template functions', () => {
-	it.skip('handles simple template function (requires template parameter support)', (done) => {
+	it('handles simple template function', (done) => {
 		assert.equal(itanium_abi.demangle("_Z3maxIiET_S0_S0_"), "max(int, int)");
 		done();
 	});
 
-	it.skip('handles template with multiple types (requires template parameter support)', (done) => {
+	it('handles template with multiple types', (done) => {
 		assert.equal(itanium_abi.demangle("_Z4swapIiEvRT_S1_"), "swap(int&, int&)");
 		done();
 	});
