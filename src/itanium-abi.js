@@ -204,68 +204,150 @@ function startsWithStdMarker(str) {
 }
 
 /**
+ * Checks if character can start a namespace segment
+ * @param {string} char - Character to check
+ * @returns {boolean} True if valid segment start
+ */
+function isValidSegmentStart(char) {
+	return /[\da-zCD]/.test(char);
+}
+
+/**
+ * Checks if parsing should stop at this character
+ * @param {string} char - Character to check
+ * @returns {boolean} True if should stop
+ */
+function isNamespaceTerminator(char) {
+	return char === 'E' || char === 'I';
+}
+
+/**
+ * Extracts the current class name from segments (for constructor/destructor)
+ * @param {Array<string>} segments - Current namespace segments
+ * @returns {string} The class name
+ */
+function getCurrentClassName(segments) {
+	if (segments.length === 0) return '';
+	return segments[segments.length - 1].replace(/^operator.*/, '').trim();
+}
+
+/**
+ * Parses const qualifier if present after 'N'
+ * @param {string} str - String after 'N'
+ * @returns {{isConst: boolean, remaining: string}} Const flag and remaining string
+ */
+function parseConstQualifier(str) {
+	if (str[0] === 'K') {
+		return { isConst: true, remaining: str.slice(1) };
+	}
+	return { isConst: false, remaining: str };
+}
+
+/**
+ * Parses std:: prefix if present
+ * @param {string} originalStr - Original string starting with 'N'
+ * @param {string} remaining - String after 'N' and qualifiers
+ * @returns {{segments: Array<string>, remaining: string}} Segments and remaining string
+ */
+function parseStdPrefix(originalStr, remaining) {
+	if (startsWithStdMarker(originalStr)) {
+		return { segments: ["std"], remaining: remaining.replace("St", "") };
+	}
+	return { segments: [], remaining };
+}
+
+/**
+ * Parses a single namespace segment with optional template
+ * @param {string} remaining - Remaining string to parse
+ * @param {string} className - Current class name for constructors/destructors
+ * @returns {{segment: string|null, remaining: string}} Parsed segment and remaining string
+ */
+function parseSegmentWithTemplate(remaining, className) {
+	const segmentResult = parseNameSegment(remaining, className);
+	if (!segmentResult.segment) {
+		return { segment: null, remaining };
+	}
+
+	let segment = segmentResult.segment;
+	let newRemaining = segmentResult.remaining;
+
+	// Check for template arguments on this segment
+	if (newRemaining[0] === 'I') {
+		const templateResult = parseTemplateIfPresent(newRemaining, segment);
+		segment = templateResult.name;
+		newRemaining = templateResult.str;
+	}
+
+	return { segment, remaining: newRemaining };
+}
+
+/**
+ * Parses all namespace segments until terminator
+ * @param {string} remaining - String to parse
+ * @param {Array<string>} initialSegments - Initial segments (e.g., std)
+ * @returns {{segments: Array<string>, remaining: string}} All segments and remaining string
+ */
+function parseNamespaceSegments(remaining, initialSegments = []) {
+	const segments = [...initialSegments];
+
+	while (remaining.length > 0) {
+		const firstChar = remaining[0];
+
+		if (isNamespaceTerminator(firstChar)) {
+			break;
+		}
+
+		if (!isValidSegmentStart(firstChar)) {
+			break;
+		}
+
+		const className = getCurrentClassName(segments);
+		const { segment, remaining: newRemaining } = parseSegmentWithTemplate(remaining, className);
+
+		if (!segment) {
+			break;
+		}
+
+		segments.push(segment);
+		remaining = newRemaining;
+	}
+
+	return { segments, remaining };
+}
+
+/**
+ * Consumes the terminating 'E' if present
+ * @param {string} str - String to process
+ * @returns {string} Remaining string after consuming 'E'
+ */
+function consumeTerminator(str) {
+	return str[0] === 'E' ? str.slice(1) : str;
+}
+
+/**
  * Parses a nested namespace path (starts with 'N', ends with 'E')
  * @param {string} str - String starting with 'N'
  * @returns {{name: string, str: string, isConst: boolean}} Parsed namespace path, remaining string, and const qualifier
  */
 function parseNestedNamespace(str) {
 	let remaining = str.slice(1); // Skip 'N'
-	const segments = [];
-	let isConst = false;
-	
-	// Check for const qualifier (K after N)
-	if (remaining[0] === 'K') {
-		isConst = true;
-		remaining = remaining.slice(1);
-	}
 
-	// Handle std:: prefix
-	if (startsWithStdMarker(str)) {
-		segments.push("std");
-		remaining = remaining.replace("St", "");
-	}
+	// Parse const qualifier
+	const { isConst, remaining: afterConst } = parseConstQualifier(remaining);
+	remaining = afterConst;
 
-	// Parse all namespace/class segments until 'E' or 'I'
-	while (remaining.length > 0) {
-		const firstChar = remaining[0];
-		
-		// End of nested namespace
-		if (firstChar === 'E' || firstChar === 'I') {
-			break;
-		}
-		
-		// Must be a digit, lowercase letter (operator), or C/D (constructor/destructor)
-		if (!/\d/.test(firstChar) && !/[a-zCD]/.test(firstChar)) {
-			break;
-		}
+	// Parse std:: prefix if present
+	const { segments: stdSegments, remaining: afterStd } = parseStdPrefix(str, remaining);
+	remaining = afterStd;
 
-		// Get the current class name (last non-special segment) for constructor/destructor
-		const className = segments.length > 0 ? segments[segments.length - 1].replace(/^operator.*/, '').trim() : '';
-		
-		// Parse one segment
-		const segmentResult = parseNameSegment(remaining, className);
-		if (!segmentResult.segment) {
-			break;
-		}
-		
-		segments.push(segmentResult.segment);
-		remaining = segmentResult.remaining;
+	// Parse all namespace segments
+	const { segments, remaining: afterSegments } = parseNamespaceSegments(remaining, stdSegments);
+	remaining = afterSegments;
 
-		// Check for template arguments on this segment
-		if (remaining[0] === 'I') {
-			const lastSegment = segments[segments.length - 1];
-			const templateResult = parseTemplateIfPresent(remaining, lastSegment);
-			segments[segments.length - 1] = templateResult.name;
-			remaining = templateResult.str;
-		}
-	}
+	// Consume terminating 'E'
+	remaining = consumeTerminator(remaining);
 
-	// Consume the terminating 'E'
-	if (remaining[0] === 'E') {
-		remaining = remaining.slice(1);
-	}
-
-	return { name: segments.join("::"), str: remaining, isConst: isConst };
+	return { name: segments.join("::"), str: remaining, isConst };
 }
 
 /**
@@ -946,6 +1028,55 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 }
 
 /**
+ * Checks if a separator is needed before the current type
+ * @param {number} index - Current type index
+ * @param {Object} type - Current type info
+ * @param {Object|null} prevType - Previous type info
+ * @returns {boolean} True if separator needed
+ */
+function needsTypeSeparator(index, type, prevType) {
+	// No separator for first item
+	if (index === 0) return false;
+	
+	// No separator for template end markers (they just close with '>')
+	if (type.templateEnd) return false;
+	
+	// No separator if previous was template start (we just opened with '<')
+	if (prevType && prevType.templateStart) return false;
+	
+	return true;
+}
+
+/**
+ * Processes a single type for serialization
+ * @param {Object} type - Type info to process
+ * @param {Array<string>} result - Result array to append to
+ * @param {number} index - Current index in types array
+ * @param {Object|null} prevType - Previous type info
+ * @returns {number} New template depth
+ */
+function processTypeForSerialization(type, result, index, prevType, templateDepth) {
+	// Add separator if needed
+	if (needsTypeSeparator(index, type, prevType)) {
+		result.push(", ");
+	}
+
+	// Track template nesting and format type
+	let newDepth = templateDepth;
+	if (type.templateStart) {
+		newDepth++;
+	}
+
+	result.push(formatTypeInfo(type));
+
+	if (type.templateEnd) {
+		newDepth--;
+	}
+
+	return newDepth;
+}
+
+/**
  * Serializes a list of types into a parameter list string with proper template handling
  * @param {Array} types - The array of type info objects
  * @returns {string} Formatted parameter list
@@ -957,32 +1088,7 @@ function serializeTypeList(types) {
 	for (let i = 0; i < types.length; i++) {
 		const type = types[i];
 		const prevType = i > 0 ? types[i - 1] : null;
-		const formattedType = formatTypeInfo(type);
-
-		// Determine if we need a separator before this type
-		// Add separator when:
-		// - Not the first item
-		// - Not a template end marker (they just close with '>')
-		// - Previous item was not a template start (we just opened with '<')
-		const needsSeparator = i > 0 &&
-			!type.templateEnd &&
-			prevType &&
-			!prevType.templateStart;
-
-		if (needsSeparator) {
-			result.push(", ");
-		}
-
-		// Track template nesting
-		if (type.templateStart) {
-			templateDepth++;
-		}
-
-		result.push(formattedType);
-
-		if (type.templateEnd) {
-			templateDepth--;
-		}
+		templateDepth = processTypeForSerialization(type, result, i, prevType, templateDepth);
 	}
 
 	return result.join('');
