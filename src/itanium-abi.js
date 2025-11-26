@@ -1,8 +1,7 @@
 /**
  * Demangles C++ function names mangled according to the IA64 C++ ABI
  *
- * This is a pretentious and cocky way to say that this file demangles function names
- * mangled by GCC and Clang.
+ * This is means that this file demangles function names mangled by GCC and Clang.
  *
  * Material used: https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling
  */
@@ -17,12 +16,12 @@ function parseLengthPrefixed(str) {
 	if (!lengthMatch || !lengthMatch[0]) {
 		return { value: "", remaining: str };
 	}
-	
+
 	const length = parseInt(lengthMatch[0], 10);
 	const afterLength = str.slice(lengthMatch[0].length);
 	const value = afterLength.slice(0, length);
 	const remaining = afterLength.slice(length);
-	
+
 	return { value, remaining };
 }
 
@@ -33,12 +32,12 @@ function parseLengthPrefixed(str) {
  */
 function parseNameSegment(str) {
 	const result = parseLengthPrefixed(str);
-	
+
 	// Handle anonymous namespace
 	if (result.value === "_GLOBAL__N_1") {
 		return { segment: "(anonymous namespace)", remaining: result.remaining };
 	}
-	
+
 	return { segment: result.value, remaining: result.remaining };
 }
 
@@ -52,9 +51,73 @@ function hasMoreSegments(str, isEntity) {
 	if (!isEntity || !str.length) {
 		return false;
 	}
-	
+
 	const firstChar = str[0];
 	return firstChar !== 'E' && firstChar !== 'I' && /\d/.test(firstChar);
+}
+
+/**
+ * Checks if string starts with std:: marker
+ * @param {string} str - String to check
+ * @returns {boolean} True if starts with St marker
+ */
+function startsWithStdMarker(str) {
+	return str.slice(1, 3) === "St";
+}
+
+/**
+ * Parses a nested namespace path (starts with 'N', ends with 'E')
+ * @param {string} str - String starting with 'N'
+ * @returns {{name: string, str: string}} Parsed namespace path and remaining string
+ */
+function parseNestedNamespace(str) {
+	let remaining = str.slice(1); // Skip 'N'
+	const segments = [];
+
+	// Handle std:: prefix
+	if (startsWithStdMarker(str)) {
+		segments.push("std");
+		remaining = remaining.replace("St", "");
+	}
+
+	// Parse all namespace/class segments until 'E' or 'I'
+	while (remaining.length > 0) {
+		const firstChar = remaining[0];
+		
+		// End of nested namespace
+		if (firstChar === 'E' || firstChar === 'I') {
+			break;
+		}
+		
+		// Must be a digit (length-prefixed segment)
+		if (!/\d/.test(firstChar)) {
+			break;
+		}
+
+		// Parse one segment
+		const segmentResult = parseNameSegment(remaining);
+		if (!segmentResult.segment) {
+			break;
+		}
+		
+		segments.push(segmentResult.segment);
+		remaining = segmentResult.remaining;
+
+		// Check for template arguments on this segment
+		if (remaining[0] === 'I') {
+			const lastSegment = segments[segments.length - 1];
+			const templateResult = parseTemplateIfPresent(remaining, lastSegment);
+			segments[segments.length - 1] = templateResult.name;
+			remaining = templateResult.str;
+		}
+	}
+
+	// Consume the terminating 'E'
+	if (remaining[0] === 'E') {
+		remaining = remaining.slice(1);
+	}
+
+	return { name: segments.join("::"), str: remaining };
 }
 
 /**
@@ -64,51 +127,20 @@ function hasMoreSegments(str, isEntity) {
  * @returns {{name: string, str: string}} Parsed name and remaining string
  */
 function popName(remainingString) {
-	// The name is in the format <length><str>
-	let isLastSegment = false;
-	let resultName = "";
-	let isEntity = false;
-
-	while (!isLastSegment) {
-		isLastSegment = remainingString[0] !== "N";
-
-		// St means std:: in the mangled string
-		if (remainingString.slice(1, 3) === "St") {
-			resultName += "std::";
-			remainingString = remainingString.replace("St", "");
-		}
-
-		isEntity = isEntity || !isLastSegment;
-
-		if (!isLastSegment) {
-			remainingString = remainingString.slice(1); // Remove 'N'
-		}
-		
-		// Parse one segment (length-prefixed name)
-		const segmentResult = parseNameSegment(remainingString);
-		if (segmentResult.segment) {
-			resultName += segmentResult.segment;
-			remainingString = segmentResult.remaining;
-
-			// Check for template arguments in the name (I...E)
-			const templateResult = parseTemplateIfPresent(remainingString, resultName);
-			resultName = templateResult.name;
-			remainingString = templateResult.str;
-		}
-
-		// Determine if more segments follow
-		const moreSegments = hasMoreSegments(remainingString, isEntity);
-		if (moreSegments) {
-			resultName += "::";
-		}
-		isLastSegment = !moreSegments && (isEntity || isLastSegment);
+	// Check if this is a nested namespace (starts with 'N')
+	if (remainingString[0] === 'N') {
+		return parseNestedNamespace(remainingString);
 	}
 
-	if (isEntity && remainingString[0] === 'E') {
-		remainingString = remainingString.slice(1);
+	// Simple case: single name segment
+	const segmentResult = parseNameSegment(remainingString);
+	if (!segmentResult.segment) {
+		return { name: "", str: remainingString };
 	}
 
-	return { name: resultName, str: remainingString };
+	// Check for template arguments
+	const templateResult = parseTemplateIfPresent(segmentResult.remaining, segmentResult.segment);
+	return { name: templateResult.name, str: templateResult.str };
 }
 
 /**
@@ -122,13 +154,13 @@ function parseTemplateIfPresent(str, currentName) {
 	if (str[0] !== 'I') {
 		return { name: currentName, str: str };
 	}
-	
+
 	const nextChar = str[1];
 	if (!nextChar || !/\d/.test(nextChar)) {
 		// If next char is not a digit (it's a type code), don't parse templates here
 		return { name: currentName, str: str };
 	}
-	
+
 	// Parse length-prefixed template arguments
 	let resultName = currentName + "<";
 	let remaining = str.slice(1); // Skip 'I'
@@ -139,18 +171,18 @@ function parseTemplateIfPresent(str, currentName) {
 		if (!result.value) {
 			break; // Not a length-prefixed name, stop parsing templates
 		}
-		
+
 		templateArgs.push(result.value);
 		remaining = result.remaining;
 	}
 
 	resultName += templateArgs.join(", ");
-	
+
 	if (remaining[0] === 'E') {
 		resultName += ">";
 		remaining = remaining.slice(1);
 	}
-	
+
 	return { name: resultName, str: remaining };
 }
 
@@ -179,7 +211,7 @@ function parseTypeQualifiers(str) {
 		isRValueRef: false,
 		numPtr: 0
 	};
-	
+
 	const qualifierMap = {
 		'R': () => qualifiers.isRef = true,
 		'O': () => qualifiers.isRValueRef = true,
@@ -188,12 +220,12 @@ function parseTypeQualifiers(str) {
 		'K': () => qualifiers.isConst = true,
 		'P': () => qualifiers.numPtr++
 	};
-	
+
 	while (qualifierMap[str[0]]) {
 		qualifierMap[str[0]]();
 		str = str.slice(1);
 	}
-	
+
 	return { qualifiers, str };
 }
 
@@ -226,7 +258,7 @@ function getBasicTypeName(typeCode) {
 		'g': '__float128',
 		'z': '...'
 	};
-	
+
 	return typeMap[typeCode] || null;
 }
 
@@ -244,25 +276,25 @@ function parseStdType(str) {
 		'o': 'std::basic_ostream<char, std::char_traits<char>>',
 		'd': 'std::basic_iostream<char, std::char_traits<char>>'
 	};
-	
+
 	const firstChar = str[0];
-	
+
 	if (firstChar === 't') {
 		// It's a custom type name (St + name)
 		const result = popName(str.slice(1));
 		return { typeStr: "std::" + result.name, str: result.str };
 	}
-	
+
 	if (stdTypeMap[firstChar]) {
 		return { typeStr: stdTypeMap[firstChar], str: str.slice(1) };
 	}
-	
+
 	// Check for other std types by reading the name
 	if (!isNaN(parseInt(firstChar, 10))) {
 		const result = popName(str);
 		return { typeStr: "std::" + result.name, str: result.str };
 	}
-	
+
 	return { typeStr: '', str: str };
 }
 
@@ -299,7 +331,7 @@ module.exports = {
 		// Serialize types with proper template context awareness
 		const parameterList = serializeTypeList(types);
 		const signature = functionName + "(" + parameterList + ")";
-		
+
 		return signature;
 	}
 };
@@ -316,26 +348,22 @@ function parseTypeList(encoding) {
 	let templateStack = [];
 
 	while (remainingEncoding.length > 0) {
-		const { typeInfo, remaining, templateDepth: newDepth, templateStack: newStack, skip } = parseSingleType(
+		const { typeInfo, remaining, templateDepth: newDepth, templateStack: newStack } = parseSingleType(
 			remainingEncoding,
 			types,
 			templateDepth,
 			templateStack
 		);
-		
+
 		if (typeInfo) {
 			types.push(typeInfo);
 		}
-		
+
 		remainingEncoding = remaining;
 		templateDepth = newDepth;
 		templateStack = newStack;
-		
-		if (skip) {
-			continue;
-		}
 	}
-	
+
 	return { types };
 }
 
@@ -360,6 +388,60 @@ function createTypeInfo() {
 }
 
 /**
+ * Represents the result of parsing a single type from the encoding
+ */
+class ParseResult {
+	/**
+	 * @param {Object|null} typeInfo - The parsed type info or null
+	 * @param {string} remaining - Remaining encoding string
+	 * @param {number} templateDepth - Template nesting depth
+	 * @param {Array} templateStack - Template stack
+	 */
+	constructor(typeInfo, remaining, templateDepth, templateStack) {
+		this.typeInfo = typeInfo;
+		this.remaining = remaining;
+		this.templateDepth = templateDepth;
+		this.templateStack = templateStack;
+	}
+}
+
+/**
+ * Handles template opening bracket 'I'
+ * @param {string} remaining - Remaining encoding
+ * @param {Array} types - Current types array
+ * @param {number} templateDepth - Current depth
+ * @param {Array} templateStack - Current stack
+ * @returns {ParseResult} Parse result
+ */
+function handleTemplateOpen(remaining, types, templateDepth, templateStack) {
+	if (types.length > 0) {
+		types[types.length - 1].templateStart = true;
+		templateStack.push(types[types.length - 1]);
+	}
+	return new ParseResult(null, remaining, templateDepth + 1, templateStack);
+}
+
+/**
+ * Handles template closing bracket 'E'
+ * @param {string} remaining - Remaining encoding
+ * @param {number} templateDepth - Current depth
+ * @param {Array} templateStack - Current stack
+ * @returns {ParseResult} Parse result
+ */
+function handleTemplateClose(remaining, templateDepth, templateStack) {
+	if (templateDepth <= 0) {
+		return new ParseResult(null, remaining, templateDepth, templateStack);
+	}
+
+	const typeInfo = createTypeInfo();
+	typeInfo.templateEnd = true;
+	const newDepth = templateDepth - 1;
+	typeInfo.templateType = templateStack[newDepth];
+	const newStack = templateStack.slice(0, -1);
+	return new ParseResult(typeInfo, remaining, newDepth, newStack);
+}
+
+/**
  * Parses a single type from the encoding
  * @param {string} encoding - The encoding string
  * @param {Array} types - Current types array
@@ -368,67 +450,47 @@ function createTypeInfo() {
  * @returns {Object} Parse result with typeInfo and remaining string
  */
 function parseSingleType(encoding, types, templateDepth, templateStack) {
-	let currentChar = encoding[0];
-	let remainingEncoding = encoding.slice(1);
+	// Parse type qualifiers first
+	const qualifierResult = parseTypeQualifiers(encoding);
+	const currentChar = qualifierResult.str[0];
+	const remainingAfterQualifiers = qualifierResult.str.slice(1);
 
+	// Handle template markers early (they don't need type info)
+	if (currentChar === 'I') {
+		return handleTemplateOpen(remainingAfterQualifiers, types, templateDepth, templateStack);
+	}
+
+	if (currentChar === 'E') {
+		return handleTemplateClose(remainingAfterQualifiers, templateDepth, templateStack);
+	}
+
+	// Create type info with qualifiers for all other cases
 	const typeInfo = createTypeInfo();
-
-	// Parse type qualifiers (const, ptr, ref...)
-	const qualifierResult = parseTypeQualifiers(currentChar + remainingEncoding);
 	Object.assign(typeInfo, qualifierResult.qualifiers);
-	currentChar = qualifierResult.str[0];
-	remainingEncoding = qualifierResult.str.slice(1);
 
-	// Get the type code and process it
+	// Try basic type
 	const basicType = getBasicTypeName(currentChar);
 	if (basicType) {
 		typeInfo.typeStr = basicType;
-		return { typeInfo, remaining: remainingEncoding, templateDepth, templateStack, skip: false };
+		return new ParseResult(typeInfo, remainingAfterQualifiers, templateDepth, templateStack);
 	}
-	
-	if (currentChar === 'S') {
-		// Abbreviated std:: types
-		const stdResult = parseStdType(remainingEncoding);
-		typeInfo.typeStr = stdResult.typeStr;
-		return { typeInfo, remaining: stdResult.str, templateDepth, templateStack, skip: false };
-	}
-	
-	if (currentChar === 'I') {
-		// Template open bracket (<)
-		if (types.length > 0) {
-			types[types.length - 1].templateStart = true;
-			templateStack.push(types[types.length - 1]);
-		}
-		return {
-			typeInfo: null,
-			remaining: remainingEncoding,
-			templateDepth: templateDepth + 1,
-			templateStack,
-			skip: true
-		};
-	}
-	
-	if (currentChar === 'E') {
-		// Template closing bracket (>)
-		if (templateDepth <= 0) {
-			return { typeInfo: null, remaining: remainingEncoding, templateDepth, templateStack, skip: true };
-		}
 
-		typeInfo.templateEnd = true;
-		const newDepth = templateDepth - 1;
-		typeInfo.templateType = templateStack[newDepth];
-		const newStack = templateStack.slice(0, -1);
-		return { typeInfo, remaining: remainingEncoding, templateDepth: newDepth, templateStack: newStack, skip: false };
+	// Try std abbreviated type
+	if (currentChar === 'S') {
+		const stdResult = parseStdType(remainingAfterQualifiers);
+		typeInfo.typeStr = stdResult.typeStr;
+		return new ParseResult(typeInfo, stdResult.str, templateDepth, templateStack);
 	}
-	
+
+	// Try custom type name (starts with digit or 'N' for namespace)
 	if (!isNaN(parseInt(currentChar, 10)) || currentChar === "N") {
-		// It's a custom type name
-		const typeNameResult = popName(currentChar + remainingEncoding);
+		const typeNameResult = popName(currentChar + remainingAfterQualifiers);
 		typeInfo.typeStr = typeNameResult.name;
-		return { typeInfo, remaining: typeNameResult.str, templateDepth, templateStack, skip: false };
+		return new ParseResult(typeInfo, typeNameResult.str, templateDepth, templateStack);
 	}
-	
-	return { typeInfo: null, remaining: remainingEncoding, templateDepth, templateStack, skip: true };
+
+	// Unknown type code - skip it
+	return new ParseResult(null, remainingAfterQualifiers, templateDepth, templateStack);
 }
 
 /**
@@ -439,46 +501,41 @@ function parseSingleType(encoding, types, templateDepth, templateStack) {
 function serializeTypeList(types) {
 	const result = [];
 	let templateDepth = 0;
-	
+
 	for (let i = 0; i < types.length; i++) {
 		const type = types[i];
 		const prevType = i > 0 ? types[i - 1] : null;
 		const formattedType = formatTypeInfo(type);
-		
+
 		// Determine if we need a separator before this type
 		// Add separator when:
 		// - Not the first item
 		// - Not a template end marker (they just close with '>')
 		// - Previous item was not a template start (we just opened with '<')
-		const needsSeparator = i > 0 && 
-			!type.templateEnd && 
-			prevType && 
+		const needsSeparator = i > 0 &&
+			!type.templateEnd &&
+			prevType &&
 			!prevType.templateStart;
-		
+
 		if (needsSeparator) {
 			result.push(", ");
 		}
-		
+
 		// Track template nesting
 		if (type.templateStart) {
 			templateDepth++;
 		}
-		
+
 		result.push(formattedType);
-		
+
 		if (type.templateEnd) {
 			templateDepth--;
 		}
 	}
-	
+
 	return result.join('');
 }
 
-/**
- * Formats a type info object into its string representation
- * @param {Object} typeInfo - The type info to format
- * @returns {string} Formatted type string
- */
 /**
  * Formats reference and pointer qualifiers
  * @param {Object} type - Type or template type object
@@ -488,13 +545,18 @@ function formatReferenceAndPointers(type) {
 	let result = "";
 	if (type.isRef) result += "&";
 	if (type.isRValueRef) result += "&&";
-	for (let i = 0; i < type.numPtr; i++) result += "*";
+	result += "*".repeat(type.numPtr);
 	return result;
 }
 
+/**
+ * Formats a type info object into its string representation
+ * @param {Object} typeInfo - The type info to format
+ * @returns {string} Formatted type string
+ */
 function formatTypeInfo(typeInfo) {
 	let result = "";
-	
+
 	if (typeInfo.isConst) result += "const ";
 	if (typeInfo.isVolatile) result += "volatile ";
 
