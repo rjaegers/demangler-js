@@ -1,331 +1,515 @@
 /**
-   Demangles C++ function names mangled according to the IA64 C++ ABI
+ * Demangles C++ function names mangled according to the IA64 C++ ABI
+ *
+ * This is a pretentious and cocky way to say that this file demangles function names
+ * mangled by GCC and Clang.
+ *
+ * Material used: https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling
+ */
 
-   This is a pretensious and cocky way to say that this file demangles function names
-   mangled by GCC and Clang.
-
-   Material used: https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling
-**/
-
-/* Removes a mangled name from 'str', in the mangled name format
-   Returns an object. The 'name' property is the name, the 'str' is the remainder of the string */
-function popName(str) {
-	/* The name is in the format <length><str> */
-
-	let isLast = false;
-	let namestr = "";
-	let rlen = 0;
-	const ostr = str;
-	let isEntity = false;
-
-	while (!isLast) {
-
-		/* This is used for decoding names inside complex namespaces
-		   Whenever we find an 'N' preceding a number, it's a prefix/namespace
-		*/
-		isLast = str[0] != "N";
-
-		/* St means std:: in the mangled string 
-		   This std:: check is for inside the name, not outside, 
-		   unlike the one in the demangle function
-		 */
-		if (str.substr(1, 2) === "St") {
-			namestr = namestr.concat("std::");
-			str = str.replace("St", "");
-			rlen += 2; // Consumed "St"
-		}
-
-		/* This is used for us to know we'll find an E in the end of this name
-		   The E marks the final of our name
-		*/
-		isEntity = isEntity || !isLast;
-
-		if (!isLast) {
-			str = str.substr(1); // Remove 'N'
-			rlen++; // Consumed 'N'
-		}		// Parse one segment (length-prefixed name)
-		const res = /(\d+)/.exec(str);
-		if (res && res[0]) {
-			const len = parseInt(res[0], 10);
-			const strstart = str.substr(res[0].length);
-			let segment = strstart.substr(0, len);
-
-			// Handle anonymous namespace
-			if (segment === "_GLOBAL__N_1") {
-				segment = "(anonymous namespace)";
-			}
-
-			namestr = namestr.concat(segment);
-			str = strstart.substr(len);
-			rlen += res[0].length + len;
-
-			// Check for template arguments in the name (I...E)
-			// Only parse if template args are length-prefixed names, not type codes
-			if (str[0] === 'I') {
-				// Look ahead to see if the template arg is a length-prefixed name or a type code
-				const nextChar = str[1];
-				if (nextChar && /\d/.test(nextChar)) {
-					// It's a length-prefixed name, we can parse it
-					namestr = namestr.concat("<");
-					str = str.substr(1); // Skip 'I'
-					rlen++;
-
-					let firstArg = true;
-					while (str.length > 0 && str[0] !== 'E') {
-						if (!firstArg) {
-							namestr = namestr.concat(", ");
-						}
-						firstArg = false;
-
-						// Parse template argument as a length-prefixed name
-						const argRes = /(\d+)/.exec(str);
-						if (argRes && argRes[0]) {
-							const argLen = parseInt(argRes[0], 10);
-							const argStart = str.substr(argRes[0].length);
-							const argName = argStart.substr(0, argLen);
-							namestr = namestr.concat(argName);
-							str = argStart.substr(argLen);
-							rlen += argRes[0].length + argLen;
-						} else {
-							// Not a length-prefixed name, stop parsing templates
-							break;
-						}
-					}
-
-					if (str[0] === 'E') {
-						namestr = namestr.concat(">");
-						str = str.substr(1); // Skip 'E'
-						rlen++;
-					}
-				}
-				// If next char is not a digit (it's a type code), don't parse templates here
-			}
-		}
-
-		// Add :: separator if this isn't the last segment
-		// For entities, check if more segments follow before the E
-		// For non-entities, check if outer loop will continue
-		// Stop at 'I' (template start) - templates are handled by main demangle loop
-		if (isEntity) {
-			// Continue parsing if more length-prefixed names follow
-			if (str.length > 0 && str[0] !== 'E' && str[0] !== 'I' && /\d/.test(str[0])) {
-				namestr = namestr.concat("::");
-				// Keep going in the outer while loop
-				isLast = false;
-			} else {
-				// We've hit E, I, or non-digit, so this is the last segment
-				isLast = true;
-			}
-		} else if (!isLast) {
-			// Non-entity, but not the last in a namespace chain
-			namestr = namestr.concat("::");
-		}
+/**
+ * Parses a single name segment (length-prefixed)
+ * @param {string} str - String starting with a length prefix
+ * @returns {{segment: string, consumed: number, remaining: string}} Parsed segment info
+ */
+function parseNameSegment(str) {
+	const lengthMatch = /(\d+)/.exec(str);
+	if (!lengthMatch || !lengthMatch[0]) {
+		return { segment: "", consumed: 0, remaining: str };
 	}
-
-	if (isEntity && str[0] === 'E') {
-		rlen += 1; // Take out the "E", the entity end mark
+	
+	const segmentLength = parseInt(lengthMatch[0], 10);
+	const afterLength = str.substr(lengthMatch[0].length);
+	let segment = afterLength.substr(0, segmentLength);
+	
+	// Handle anonymous namespace
+	if (segment === "_GLOBAL__N_1") {
+		segment = "(anonymous namespace)";
 	}
-
-	return { name: namestr, str: ostr.substr(rlen) };
+	
+	const consumed = lengthMatch[0].length + segmentLength;
+	const remaining = afterLength.substr(segmentLength);
+	
+	return { segment, consumed, remaining };
 }
 
+/**
+ * Checks if there are more segments to parse in a name
+ * @param {string} str - The remaining string
+ * @param {boolean} isEntity - Whether this is an entity (has 'E' terminator)
+ * @returns {boolean} True if more segments follow
+ */
+function hasMoreSegments(str, isEntity) {
+	if (!isEntity) {
+		return false;
+	}
+	
+	if (str.length === 0) {
+		return false;
+	}
+	
+	const firstChar = str[0];
+	return firstChar !== 'E' && firstChar !== 'I' && /\d/.test(firstChar);
+}
+
+/**
+ * Removes a mangled name from 'remainingString', in the mangled name format
+ * Returns an object with 'name' property (the name) and 'str' property (the remainder)
+ * @param {string} remainingString - The mangled string to parse
+ * @returns {{name: string, str: string}} Parsed name and remaining string
+ */
+function popName(remainingString) {
+	// The name is in the format <length><str>
+	let isLastSegment = false;
+	let resultName = "";
+	let consumedLength = 0;
+	const originalString = remainingString;
+	let isEntity = false;
+
+	while (!isLastSegment) {
+		isLastSegment = remainingString[0] !== "N";
+
+		// St means std:: in the mangled string
+		if (remainingString.substr(1, 2) === "St") {
+			resultName += "std::";
+			remainingString = remainingString.replace("St", "");
+			consumedLength += 2;
+		}
+
+		isEntity = isEntity || !isLastSegment;
+
+		if (!isLastSegment) {
+			remainingString = remainingString.substr(1); // Remove 'N'
+			consumedLength++;
+		}
+		
+		// Parse one segment (length-prefixed name)
+		const segmentResult = parseNameSegment(remainingString);
+		if (segmentResult.segment) {
+			resultName += segmentResult.segment;
+			remainingString = segmentResult.remaining;
+			consumedLength += segmentResult.consumed;
+
+			// Check for template arguments in the name (I...E)
+			const templateResult = parseTemplateIfPresent(remainingString, resultName);
+			resultName = templateResult.name;
+			remainingString = templateResult.str;
+			consumedLength += templateResult.consumed;
+		}
+
+		// Add :: separator if more segments follow
+		if (hasMoreSegments(remainingString, isEntity)) {
+			resultName += "::";
+			isLastSegment = false;
+		} else if (isEntity) {
+			isLastSegment = true;
+		} else if (!isLastSegment) {
+			resultName += "::";
+		}
+	}
+
+	if (isEntity && remainingString[0] === 'E') {
+		consumedLength += 1;
+	}
+
+	return { name: resultName, str: originalString.substr(consumedLength) };
+}
+
+/**
+ * Extracts the first character from a string
+ * @param {string} str - The string to process
+ * @returns {{ch: string, str: string}} First character and remaining string
+ */
 function popChar(str) {
 	return { ch: str[0], str: str.slice(1) };
 }
 
+/**
+ * Parses template arguments if present in the mangled name
+ * @param {string} str - The string starting with potential template marker 'I'
+ * @param {string} currentName - The name being built
+ * @returns {{name: string, str: string, consumed: number}} Updated name, remaining string, and consumed length
+ */
+function parseTemplateIfPresent(str, currentName) {
+	// Early returns for non-template cases
+	if (str[0] !== 'I') {
+		return { name: currentName, str: str, consumed: 0 };
+	}
+	
+	const nextChar = str[1];
+	if (!nextChar || !/\d/.test(nextChar)) {
+		// If next char is not a digit (it's a type code), don't parse templates here
+		return { name: currentName, str: str, consumed: 0 };
+	}
+	
+	// Parse length-prefixed template arguments
+	let resultName = currentName + "<";
+	let remaining = str.substr(1); // Skip 'I'
+	let consumed = 1;
+	const templateArgs = [];
+
+	while (remaining.length > 0 && remaining[0] !== 'E') {
+		const argMatch = /(\d+)/.exec(remaining);
+		if (!argMatch || !argMatch[0]) {
+			break; // Not a length-prefixed name, stop parsing templates
+		}
+		
+		const argLength = parseInt(argMatch[0], 10);
+		const afterArgLength = remaining.substr(argMatch[0].length);
+		const argName = afterArgLength.substr(0, argLength);
+		
+		templateArgs.push(argName);
+		remaining = afterArgLength.substr(argLength);
+		consumed += argMatch[0].length + argLength;
+	}
+
+	resultName += templateArgs.join(", ");
+	
+	if (remaining[0] === 'E') {
+		resultName += ">";
+		remaining = remaining.substr(1);
+		consumed++;
+	}
+	
+	return { name: resultName, str: remaining, consumed: consumed };
+}
+
+/**
+ * Type qualifiers that can be parsed from mangled names
+ * @typedef {Object} TypeQualifiers
+ * @property {boolean} isConst
+ * @property {boolean} isVolatile
+ * @property {boolean} isRestrict
+ * @property {boolean} isRef
+ * @property {boolean} isRValueRef
+ * @property {number} numPtr
+ */
+
+/**
+ * Parses type qualifiers (const, volatile, pointers, references) from mangled string
+ * @param {string} str - The mangled string to parse
+ * @returns {{qualifiers: TypeQualifiers, str: string}} Parsed qualifiers and remaining string
+ */
+function parseTypeQualifiers(str) {
+	const qualifiers = {
+		isConst: false,
+		isVolatile: false,
+		isRestrict: false,
+		isRef: false,
+		isRValueRef: false,
+		numPtr: 0
+	};
+	
+	let continueQualifiers = true;
+	while (continueQualifiers) {
+		const ch = str[0];
+		switch (ch) {
+			case 'R':
+				qualifiers.isRef = true;
+				str = str.slice(1);
+				break;
+			case 'O':
+				qualifiers.isRValueRef = true;
+				str = str.slice(1);
+				break;
+			case 'r':
+				qualifiers.isRestrict = true;
+				str = str.slice(1);
+				break;
+			case 'V':
+				qualifiers.isVolatile = true;
+				str = str.slice(1);
+				break;
+			case 'K':
+				qualifiers.isConst = true;
+				str = str.slice(1);
+				break;
+			case 'P':
+				qualifiers.numPtr++;
+				str = str.slice(1);
+				break;
+			default:
+				continueQualifiers = false;
+		}
+	}
+	
+	return { qualifiers, str };
+}
+
+/**
+ * Maps mangled type codes to their C++ type names
+ * @param {string} typeCode - Single character type code
+ * @returns {string|null} Type name or null if not a basic type
+ */
+function getBasicTypeName(typeCode) {
+	const typeMap = {
+		'v': 'void',
+		'w': 'wchar_t',
+		'b': 'bool',
+		'c': 'char',
+		'a': 'signed char',
+		'h': 'unsigned char',
+		's': 'short',
+		't': 'unsigned short',
+		'i': 'int',
+		'j': 'unsigned int',
+		'l': 'long int',
+		'm': 'unsigned long int',
+		'x': 'long long int',
+		'y': 'unsigned long long int',
+		'n': '__int128',
+		'o': 'unsigned __int128',
+		'f': 'float',
+		'd': 'double',
+		'e': 'long double',
+		'g': '__float128',
+		'z': '...'
+	};
+	
+	return typeMap[typeCode] || null;
+}
+
+/**
+ * Parses std:: abbreviated types (S-codes)
+ * @param {string} str - String starting after 'S'
+ * @returns {{typeStr: string, str: string}} Parsed type and remaining string
+ */
+function parseStdType(str) {
+	const stdTypeMap = {
+		'a': 'std::allocator',
+		'b': 'std::basic_string',
+		's': 'std::basic_string<char, std::char_traits<char>, std::allocator<char>>',
+		'i': 'std::basic_istream<char, std::char_traits<char>>',
+		'o': 'std::basic_ostream<char, std::char_traits<char>>',
+		'd': 'std::basic_iostream<char, std::char_traits<char>>'
+	};
+	
+	const firstChar = str[0];
+	
+	if (firstChar === 't') {
+		// It's a custom type name (St + name)
+		const result = popName(str.slice(1));
+		return { typeStr: "std::" + result.name, str: result.str };
+	}
+	
+	if (stdTypeMap[firstChar]) {
+		return { typeStr: stdTypeMap[firstChar], str: str.slice(1) };
+	}
+	
+	// Check for other std types by reading the name
+	if (!isNaN(parseInt(firstChar, 10))) {
+		const result = popName(str);
+		return { typeStr: "std::" + result.name, str: result.str };
+	}
+	
+	return { typeStr: '', str: str };
+}
+
 module.exports = {
-	/* Check if the name passed is a IA64 ABI mangled name */
+	/**
+	 * Check if the name passed is a IA64 ABI mangled name
+	 * @param {string} name - The name to check
+	 * @returns {boolean} True if the name is mangled
+	 */
 	isMangled: function (name) {
 		return name.startsWith("_Z");
 	},
 
+	/**
+	 * Demangles a C++ function name
+	 * @param {string} name - The mangled name
+	 * @returns {string} The demangled function signature
+	 */
 	demangle: function (name) {
-
 		if (!this.isMangled(name)) return name;
 
-		/* Encoding is the part between the _Z (the "mangling mark") and the dot, that prefix
-		   a vendor specific suffix. That suffix will not be treated here yet */
-		const encoding = name.substr(2,
-			(name.indexOf('.') < 0) ? undefined : name.indexOf('.') - 2);
+		// Encoding is the part between the _Z (the "mangling mark") and the dot, that prefix
+		// a vendor specific suffix. That suffix will not be treated here yet
+		const dotIndex = name.indexOf('.');
+		const encoding = name.substr(2, dotIndex < 0 ? undefined : dotIndex - 2);
 
+	const functionNameResult = popName(encoding);
+	const functionName = functionNameResult.name;
 
-		let fname = popName(encoding);
-		let functionname = fname.name;
-		let types = [];
-
-		let template_count = 0;
-		let template_types = [];
-
-		// Process the types
-		let str = fname.str;
-
-		while (str.length > 0) {
-			let process = popChar(str);
-
-			/* The type info
-	
-			   isBase -> is the type the built-in one in the mangler, represented with few letters?
-			   typeStr: the type name
-			   templateType: type info for the current template.
-	
-			   The others are self descriptive
-			*/
-			let typeInfo = {
-				isBase: true, typeStr: "", isConst: false, numPtr: 0,
-				isRValueRef: false, isRef: false, isRestrict: false,
-				templateStart: false, templateEnd: false,
-				isVolatile: false, templateType: null
-			};
-
-			/* Check if we have a qualifier (like const, ptr, ref... )*/
-			var doQualifier = true;
-
-			while (doQualifier) {
-				switch (process.ch) {
-					case 'R': typeInfo.isRef = true; process = popChar(process.str); break;
-					case 'O': typeInfo.isRValueRef = true; process = popChar(process.str); break;
-					case 'r': typeInfo.isRestrict = true; process = popChar(process.str); break;
-					case 'V': typeInfo.isVolatile = true; process = popChar(process.str); break;
-					case 'K': typeInfo.isConst = true; process = popChar(process.str); break;
-					case 'P': typeInfo.numPtr++; process = popChar(process.str); break;
-					default: doQualifier = false;
-				}
-			}
-
-			/* Get the type code. Process it */
-			switch (process.ch) {
-				case 'v': typeInfo.typeStr = "void"; break;
-				case 'w': typeInfo.typeStr = "wchar_t"; break;
-				case 'b': typeInfo.typeStr = "bool"; break;
-				case 'c': typeInfo.typeStr = "char"; break;
-				case 'a': typeInfo.typeStr = "signed char"; break;
-				case 'h': typeInfo.typeStr = "unsigned char"; break;
-				case 's': typeInfo.typeStr = "short"; break;
-				case 't': typeInfo.typeStr = "unsigned short"; break;
-				case 'i': typeInfo.typeStr = "int"; break;
-				case 'S':
-					/* Abbreviated std:: types */
-					process = popChar(process.str);
-
-					switch (process.ch) {
-						case 't': {
-							// It's a custom type name (St + name)
-							const tname = popName(process.str);
-							typeInfo.typeStr = "std::".concat(tname.name);
-							process.str = tname.str;
-							break;
-						}
-						case 'a': typeInfo.typeStr = "std::allocator"; break;
-						case 'b': typeInfo.typeStr = "std::basic_string"; break;
-						case 's': typeInfo.typeStr = "std::basic_string<char, std::char_traits<char>, std::allocator<char>>"; break;
-						case 'i': typeInfo.typeStr = "std::basic_istream<char, std::char_traits<char>>"; break;
-						case 'o': typeInfo.typeStr = "std::basic_ostream<char, std::char_traits<char>>"; break;
-						case 'd': typeInfo.typeStr = "std::basic_iostream<char, std::char_traits<char>>"; break;
-						default:
-							// Check for other std types by reading the name
-							if (!isNaN(parseInt(process.ch, 10))) {
-								const tname = popName(process.ch.concat(process.str));
-								typeInfo.typeStr = "std::".concat(tname.name);
-								process.str = tname.str;
-							} else {
-								process.str = process.ch.concat(process.str);
-							}
-							break;
-					}
-
-					break;
-
-				case 'I':
-					// Template open bracket (<)
-					if (types.length > 0) {
-						types[types.length - 1].templateStart = true;
-						template_types.push(types[types.length - 1]);
-					}
-					template_count++;
-					// Don't push a new type, just advance the string
-					str = process.str;
-					continue;
-				case 'E':
-					// Template closing bracket (>)
-					if ((template_count <= 0)) {
-						str = process.str;
-						continue;
-					}
-
-					typeInfo.templateEnd = true;
-
-					template_count--;
-					typeInfo.templateType = template_types[template_count];
-					template_types = template_types.slice(0, -1);
-
-					break;
-
-				case 'j': typeInfo.typeStr = "unsigned int"; break;
-				case 'l': typeInfo.typeStr = "long int"; break;
-				case 'm': typeInfo.typeStr = "unsigned long int"; break;
-				case 'x': typeInfo.typeStr = "long long int"; break;
-				case 'y': typeInfo.typeStr = "unsigned long long int"; break;
-				case 'n': typeInfo.typeStr = "__int128"; break;
-				case 'o': typeInfo.typeStr = "unsigned __int128"; break;
-				case 'f': typeInfo.typeStr = "float"; break;
-				case 'd': typeInfo.typeStr = "double"; break;
-				case 'e': typeInfo.typeStr = "long double"; break;
-				case 'g': typeInfo.typeStr = "__float128"; break;
-				case 'z': typeInfo.typeStr = "..."; break;
-
-				/* No type code. We have a type name instead */
-				default: {
-					if (!isNaN(parseInt(process.ch, 10)) || process.ch == "N") {
-
-						// It's a custom type name
-						const tname = popName(process.ch.concat(process.str));
-						typeInfo.typeStr = typeInfo.typeStr.concat(tname.name);
-						process.str = tname.str;
-					}
-
-				} break;
-			}
-
-
-			types.push(typeInfo);
-			str = process.str;
-		}
-
-		/* Create the string representation of the type */
-		const typelist = types.map((t) => {
-			let typestr = "";
-			if (t.isConst) typestr = typestr.concat("const ");
-			if (t.isVolatile) typestr = typestr.concat("volatile ");
-
-			typestr = typestr.concat(t.typeStr);
-
-			if (t.templateStart) typestr = typestr.concat("<");
-			if (t.templateEnd) typestr = typestr.concat(">");
-
-			if (!t.templateStart) {
-				if (t.isRef) typestr = typestr.concat("&");
-				if (t.isRValueRef) typestr = typestr.concat("&&");
-				for (let i = 0; i < t.numPtr; i++) typestr = typestr.concat("*");
-				if (t.isRestrict) typestr = typestr.concat(" __restrict");
-			}
-
-			if (t.templateType) {
-				if (t.templateType.isRef) typestr = typestr.concat("&");
-				if (t.templateType.isRValueRef) typestr = typestr.concat("&&");
-				for (let i = 0; i < t.templateType.numPtr; i++) typestr = typestr.concat("*");
-			}
-
-			return typestr;
-		});
-
-		/* Those replaces are an stupid shortcut to fix templates and make it fast
-		   Without that, we would need to complicate the code
-	
-		   What it does is remove the commas where we would have the angle brackets
-		   for the templates
-		*/
-
-		return functionname.concat("(" + typelist.join(', ') + ")").replace(/<, /g, "<")
-			.replace(/<, /g, "<").replace(/, >/g, ">").replace(/, </g, "<").replace(/>, >/g, ">>");
+	// Process the types
+	const parseResult = parseTypeList(functionNameResult.str);
+	const types = parseResult.types;		// Create the string representation of the types
+		const typeList = types.map(formatTypeInfo);
+		const parameterList = typeList.join(', ');
+		const signature = functionName + "(" + parameterList + ")";
+		
+		// Clean up template formatting
+		return cleanTemplateFormatting(signature);
 	}
 };
+
+/**
+ * Parses the type list from the encoding
+ * @param {string} encoding - The type encoding string
+ * @returns {{types: Array}} Parsed types
+ */
+function parseTypeList(encoding) {
+	const types = [];
+	let remainingEncoding = encoding;
+	let templateDepth = 0;
+	let templateStack = [];
+
+	while (remainingEncoding.length > 0) {
+		const parseResult = parseSingleType(
+			remainingEncoding,
+			types,
+			templateDepth,
+			templateStack
+		);
+		
+		if (parseResult.skip) {
+			remainingEncoding = parseResult.remaining;
+			templateDepth = parseResult.templateDepth;
+			templateStack = parseResult.templateStack;
+			continue;
+		}
+		
+		if (parseResult.typeInfo) {
+			types.push(parseResult.typeInfo);
+		}
+		
+		remainingEncoding = parseResult.remaining;
+		templateDepth = parseResult.templateDepth;
+		templateStack = parseResult.templateStack;
+	}
+	
+	return { types };
+}
+
+/**
+ * Parses a single type from the encoding
+ * @param {string} encoding - The encoding string
+ * @param {Array} types - Current types array
+ * @param {number} templateDepth - Current template nesting depth
+ * @param {Array} templateStack - Current template stack
+ * @returns {Object} Parse result with typeInfo and remaining string
+ */
+function parseSingleType(encoding, types, templateDepth, templateStack) {
+	let currentChar = encoding[0];
+	let remainingEncoding = encoding.slice(1);
+
+	const typeInfo = {
+		isBase: true,
+		typeStr: "",
+		isConst: false,
+		numPtr: 0,
+		isRValueRef: false,
+		isRef: false,
+		isRestrict: false,
+		templateStart: false,
+		templateEnd: false,
+		isVolatile: false,
+		templateType: null
+	};
+
+	// Parse type qualifiers (const, ptr, ref...)
+	const qualifierResult = parseTypeQualifiers(currentChar + remainingEncoding);
+	Object.assign(typeInfo, qualifierResult.qualifiers);
+	currentChar = qualifierResult.str[0];
+	remainingEncoding = qualifierResult.str.slice(1);
+
+	// Get the type code and process it
+	const basicType = getBasicTypeName(currentChar);
+	if (basicType) {
+		typeInfo.typeStr = basicType;
+		return { typeInfo, remaining: remainingEncoding, templateDepth, templateStack, skip: false };
+	}
+	
+	if (currentChar === 'S') {
+		// Abbreviated std:: types
+		const stdResult = parseStdType(remainingEncoding);
+		typeInfo.typeStr = stdResult.typeStr;
+		return { typeInfo, remaining: stdResult.str, templateDepth, templateStack, skip: false };
+	}
+	
+	if (currentChar === 'I') {
+		// Template open bracket (<)
+		if (types.length > 0) {
+			types[types.length - 1].templateStart = true;
+			templateStack.push(types[types.length - 1]);
+		}
+		return {
+			typeInfo: null,
+			remaining: remainingEncoding,
+			templateDepth: templateDepth + 1,
+			templateStack,
+			skip: true
+		};
+	}
+	
+	if (currentChar === 'E') {
+		// Template closing bracket (>)
+		if (templateDepth <= 0) {
+			return { typeInfo: null, remaining: remainingEncoding, templateDepth, templateStack, skip: true };
+		}
+
+		typeInfo.templateEnd = true;
+		const newDepth = templateDepth - 1;
+		typeInfo.templateType = templateStack[newDepth];
+		const newStack = templateStack.slice(0, -1);
+		return { typeInfo, remaining: remainingEncoding, templateDepth: newDepth, templateStack: newStack, skip: false };
+	}
+	
+	if (!isNaN(parseInt(currentChar, 10)) || currentChar === "N") {
+		// It's a custom type name
+		const typeNameResult = popName(currentChar + remainingEncoding);
+		typeInfo.typeStr = typeNameResult.name;
+		return { typeInfo, remaining: typeNameResult.str, templateDepth, templateStack, skip: false };
+	}
+	
+	return { typeInfo: null, remaining: remainingEncoding, templateDepth, templateStack, skip: true };
+}
+
+/**
+ * Cleans up template formatting in a function signature
+ * @param {string} signature - The function signature to clean
+ * @returns {string} Cleaned signature
+ */
+function cleanTemplateFormatting(signature) {
+	// Those replaces are a shortcut to fix templates
+	// What it does is remove the commas where we would have the angle brackets
+	// for the templates
+	return signature
+		.replace(/<, /g, "<")
+		.replace(/<, /g, "<")
+		.replace(/, >/g, ">")
+		.replace(/, </g, "<")
+		.replace(/>, >/g, ">>");
+}
+
+/**
+ * Formats a type info object into its string representation
+ * @param {Object} typeInfo - The type info to format
+ * @returns {string} Formatted type string
+ */
+function formatTypeInfo(typeInfo) {
+	let result = "";
+	
+	if (typeInfo.isConst) result += "const ";
+	if (typeInfo.isVolatile) result += "volatile ";
+
+	result += typeInfo.typeStr;
+
+	if (typeInfo.templateStart) result += "<";
+	if (typeInfo.templateEnd) result += ">";
+
+	if (!typeInfo.templateStart) {
+		if (typeInfo.isRef) result += "&";
+		if (typeInfo.isRValueRef) result += "&&";
+		for (let i = 0; i < typeInfo.numPtr; i++) result += "*";
+		if (typeInfo.isRestrict) result += " __restrict";
+	}
+
+	if (typeInfo.templateType) {
+		if (typeInfo.templateType.isRef) result += "&";
+		if (typeInfo.templateType.isRValueRef) result += "&&";
+		for (let i = 0; i < typeInfo.templateType.numPtr; i++) result += "*";
+	}
+
+	return result;
+}
