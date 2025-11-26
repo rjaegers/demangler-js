@@ -333,13 +333,13 @@ module.exports = {
 
 	// Process the types
 	const parseResult = parseTypeList(functionNameResult.str);
-	const types = parseResult.types;		// Create the string representation of the types
-		const typeList = types.map(formatTypeInfo);
-		const parameterList = typeList.join(', ');
-		const signature = functionName + "(" + parameterList + ")";
-		
-		// Clean up template formatting
-		return cleanTemplateFormatting(signature);
+	const types = parseResult.types;
+
+	// Serialize types with proper template context awareness
+	const parameterList = serializeTypeList(types);
+	const signature = functionName + "(" + parameterList + ")";
+	
+	return signature;
 	}
 };
 
@@ -466,20 +466,46 @@ function parseSingleType(encoding, types, templateDepth, templateStack) {
 }
 
 /**
- * Cleans up template formatting in a function signature
- * @param {string} signature - The function signature to clean
- * @returns {string} Cleaned signature
+ * Serializes a list of types into a parameter list string with proper template handling
+ * @param {Array} types - The array of type info objects
+ * @returns {string} Formatted parameter list
  */
-function cleanTemplateFormatting(signature) {
-	// Those replaces are a shortcut to fix templates
-	// What it does is remove the commas where we would have the angle brackets
-	// for the templates
-	return signature
-		.replace(/<, /g, "<")
-		.replace(/<, /g, "<")
-		.replace(/, >/g, ">")
-		.replace(/, </g, "<")
-		.replace(/>, >/g, ">>");
+function serializeTypeList(types) {
+	const result = [];
+	let templateDepth = 0;
+	
+	for (let i = 0; i < types.length; i++) {
+		const type = types[i];
+		const prevType = i > 0 ? types[i - 1] : null;
+		const formattedType = formatTypeInfo(type);
+		
+		// Determine if we need a separator before this type
+		// Add separator when:
+		// - Not the first item
+		// - Not a template end marker (they just close with '>')
+		// - Previous item was not a template start (we just opened with '<')
+		const needsSeparator = i > 0 && 
+			!type.templateEnd && 
+			prevType && 
+			!prevType.templateStart;
+		
+		if (needsSeparator) {
+			result.push(", ");
+		}
+		
+		// Track template nesting
+		if (type.templateStart) {
+			templateDepth++;
+		}
+		
+		result.push(formattedType);
+		
+		if (type.templateEnd) {
+			templateDepth--;
+		}
+	}
+	
+	return result.join('');
 }
 
 /**
