@@ -6,6 +6,77 @@
  * Material used: https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling
  */
 
+module.exports = {
+	/**
+	 * Check if the name passed is a IA64 ABI mangled name
+	 * @param {string} name - The name to check
+	 * @returns {boolean} True if the name is mangled
+	 */
+	isMangled: function (name) {
+		return name.startsWith("_Z");
+	},
+
+	/**
+	 * Demangles a C++ function name
+	 * @param {string} name - The mangled name
+	 * @returns {string} The demangled function signature
+	 */
+	demangle: function (name) {
+		if (!this.isMangled(name)) return name;
+
+		// Encoding is the part between the _Z (the "mangling mark") and the dot, that prefix
+		// a vendor specific suffix. That suffix will not be treated here yet
+		const dotIndex = name.indexOf('.');
+		const encoding = dotIndex < 0 ? name.slice(2) : name.slice(2, dotIndex);
+
+		const functionNameResult = popName(encoding);
+		const functionName = functionNameResult.name;
+		const isConst = functionNameResult.isConst || false;
+
+		// Parse template parameters if present (I...E section after function name)
+		const templateResult = parseTemplatePlaceholders(functionNameResult.str);
+		const templateParams = templateResult.templateParams;
+		let remainingAfterTemplate = templateResult.str;
+
+		// Build substitution list: for member functions, the class/namespace is the first substitution
+		const substitutions = [];
+		if (functionName.includes('::')) {
+			// Extract class/namespace name (everything before the last ::)
+			const lastColonIndex = functionName.lastIndexOf('::');
+			const className = functionName.substring(0, lastColonIndex);
+			substitutions.push(className);
+		}
+
+		// Template parameters themselves become substitution candidates
+		if (templateParams.length > 0) {
+			for (const param of templateParams) {
+				substitutions.push(formatTypeInfo(param));
+			}
+		}
+
+		// For function templates, skip the return type (it comes after template params but before parameter types)
+		if (templateParams.length > 0 && remainingAfterTemplate.length > 0) {
+			const { remaining: afterReturnType } = parseTypeHelper(remainingAfterTemplate, substitutions, templateParams);
+			remainingAfterTemplate = afterReturnType;
+		}
+
+		// Process the types
+		const parseResult = parseTypeList(remainingAfterTemplate, substitutions, templateParams);
+		const types = parseResult.types;
+
+		// Serialize types with proper template context awareness
+		const parameterList = serializeTypeList(types);
+		let signature = functionName + "(" + parameterList + ")";
+		
+		// Add const qualifier for member functions
+		if (isConst) {
+			signature += " const";
+		}
+
+		return signature;
+	}
+};
+
 /**
  * Parses a length-prefixed string (common pattern in mangling)
  * @param {string} str - String starting with a length prefix
@@ -598,77 +669,6 @@ function parseStdType(str, substitutions = []) {
 	return { typeStr: '', str: str };
 }
 
-module.exports = {
-	/**
-	 * Check if the name passed is a IA64 ABI mangled name
-	 * @param {string} name - The name to check
-	 * @returns {boolean} True if the name is mangled
-	 */
-	isMangled: function (name) {
-		return name.startsWith("_Z");
-	},
-
-	/**
-	 * Demangles a C++ function name
-	 * @param {string} name - The mangled name
-	 * @returns {string} The demangled function signature
-	 */
-	demangle: function (name) {
-		if (!this.isMangled(name)) return name;
-
-		// Encoding is the part between the _Z (the "mangling mark") and the dot, that prefix
-		// a vendor specific suffix. That suffix will not be treated here yet
-		const dotIndex = name.indexOf('.');
-		const encoding = dotIndex < 0 ? name.slice(2) : name.slice(2, dotIndex);
-
-		const functionNameResult = popName(encoding);
-		const functionName = functionNameResult.name;
-		const isConst = functionNameResult.isConst || false;
-
-		// Parse template parameters if present (I...E section after function name)
-		const templateResult = parseTemplatePlaceholders(functionNameResult.str);
-		const templateParams = templateResult.templateParams;
-		let remainingAfterTemplate = templateResult.str;
-
-		// Build substitution list: for member functions, the class/namespace is the first substitution
-		const substitutions = [];
-		if (functionName.includes('::')) {
-			// Extract class/namespace name (everything before the last ::)
-			const lastColonIndex = functionName.lastIndexOf('::');
-			const className = functionName.substring(0, lastColonIndex);
-			substitutions.push(className);
-		}
-
-		// Template parameters themselves become substitution candidates
-		if (templateParams.length > 0) {
-			for (const param of templateParams) {
-				substitutions.push(formatTypeInfo(param));
-			}
-		}
-
-		// For function templates, skip the return type (it comes after template params but before parameter types)
-		if (templateParams.length > 0 && remainingAfterTemplate.length > 0) {
-			const { remaining: afterReturnType } = parseTypeHelper(remainingAfterTemplate, substitutions, templateParams);
-			remainingAfterTemplate = afterReturnType;
-		}
-
-		// Process the types
-		const parseResult = parseTypeList(remainingAfterTemplate, substitutions, templateParams);
-		const types = parseResult.types;
-
-		// Serialize types with proper template context awareness
-		const parameterList = serializeTypeList(types);
-		let signature = functionName + "(" + parameterList + ")";
-		
-		// Add const qualifier for member functions
-		if (isConst) {
-			signature += " const";
-		}
-
-		return signature;
-	}
-};
-
 /**
  * Parses template parameters from I...E section
  * @param {string} str - The string potentially starting with 'I'
@@ -780,61 +780,55 @@ class ParseResult {
 }
 
 /**
- * Handles template opening bracket 'I'
- * @param {string} remaining - Remaining encoding
- * @param {Array} types - Current types array
- * @param {number} templateDepth - Current depth
- * @param {Array} templateStack - Current stack
- * @returns {ParseResult} Parse result
- */
-function handleTemplateOpen(remaining, types, templateDepth, templateStack) {
-	if (types.length > 0) {
-		types[types.length - 1].templateStart = true;
-		templateStack.push(types[types.length - 1]);
-	}
-	return new ParseResult(null, remaining, templateDepth + 1, templateStack);
-}
-
-/**
- * Handles template closing bracket 'E'
- * @param {string} remaining - Remaining encoding
- * @param {number} templateDepth - Current depth
- * @param {Array} templateStack - Current stack
- * @returns {ParseResult} Parse result
- */
-function handleTemplateClose(remaining, templateDepth, templateStack) {
-	if (templateDepth <= 0) {
-		return new ParseResult(null, remaining, templateDepth, templateStack);
-	}
-
-	const typeInfo = createTypeInfo();
-	typeInfo.templateEnd = true;
-	const newDepth = templateDepth - 1;
-	typeInfo.templateType = templateStack[newDepth];
-	const newStack = templateStack.slice(0, -1);
-	return new ParseResult(typeInfo, remaining, newDepth, newStack);
-}
-
-/**
  * Type parser registry using Strategy Pattern
  * Each parser handles specific type codes and directly applies necessary side effects
  */
 const TYPE_PARSERS = [
 	{
+		// Template opening marker 'I'
+		matches: (char) => char === 'I',
+		parse: (ctx) => {
+			// This is a special case - returns a ParseResult directly
+			if (ctx.types.length > 0) {
+				ctx.types[ctx.types.length - 1].templateStart = true;
+				ctx.templateStack.push(ctx.types[ctx.types.length - 1]);
+			}
+			return new ParseResult(null, ctx.remaining, ctx.templateDepth + 1, ctx.templateStack);
+		},
+		isTemplateMarker: true
+	},
+	{
+		// Template closing marker 'E'
+		matches: (char) => char === 'E',
+		parse: (ctx) => {
+			// This is a special case - returns a ParseResult directly
+			if (ctx.templateDepth <= 0) {
+				return new ParseResult(null, ctx.remaining, ctx.templateDepth, ctx.templateStack);
+			}
+			
+			ctx.typeInfo.templateEnd = true;
+			const newDepth = ctx.templateDepth - 1;
+			ctx.typeInfo.templateType = ctx.templateStack[newDepth];
+			const newStack = ctx.templateStack.slice(0, -1);
+			return new ParseResult(ctx.typeInfo, ctx.remaining, newDepth, newStack);
+		},
+		isTemplateMarker: true
+	},
+	{
 		// Basic types (i, v, d, f, etc.)
 		matches: (char, qualifiers) => getBasicTypeName(char) !== null,
-		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
-			typeInfo.typeStr = getBasicTypeName(char);
-			return remaining;
+		parse: (ctx) => {
+			ctx.typeInfo.typeStr = getBasicTypeName(ctx.char);
+			return ctx.remaining;
 		}
 	},
 	{
 		// Array types (A<size>_<type>)
 		matches: (char) => char === 'A',
-		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
-			const result = parseArrayType(remaining, substitutions, templateParams);
+		parse: (ctx) => {
+			const result = parseArrayType(ctx.remaining, ctx.substitutions, ctx.templateParams);
 			if (result.typeStr) {
-				typeInfo.typeStr = result.typeStr;
+				ctx.typeInfo.typeStr = result.typeStr;
 				return result.str;
 			}
 			return null;
@@ -843,11 +837,11 @@ const TYPE_PARSERS = [
 	{
 		// Function pointer types (PF<return><params>E)
 		matches: (char, qualifiers) => char === 'F' && qualifiers.numPtr > 0,
-		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
-			const result = parseFunctionType(remaining, substitutions, templateParams);
+		parse: (ctx) => {
+			const result = parseFunctionType(ctx.remaining, ctx.substitutions, ctx.templateParams);
 			if (result.typeStr) {
-				typeInfo.typeStr = result.typeStr;
-				typeInfo.numPtr = 0;  // Function pointer notation already includes the pointer
+				ctx.typeInfo.typeStr = result.typeStr;
+				ctx.typeInfo.numPtr = 0;  // Function pointer notation already includes the pointer
 				return result.str;
 			}
 			return null;
@@ -856,10 +850,10 @@ const TYPE_PARSERS = [
 	{
 		// Member function pointer types (M<class><func>)
 		matches: (char) => char === 'M',
-		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
-			const result = parseMemberFunctionPointer(remaining, substitutions, templateParams);
+		parse: (ctx) => {
+			const result = parseMemberFunctionPointer(ctx.remaining, ctx.substitutions, ctx.templateParams);
 			if (result.typeStr) {
-				typeInfo.typeStr = result.typeStr;
+				ctx.typeInfo.typeStr = result.typeStr;
 				return result.str;
 			}
 			return null;
@@ -868,10 +862,10 @@ const TYPE_PARSERS = [
 	{
 		// Template parameter placeholders (T_, T0_, T1_, etc.)
 		matches: (char) => char === 'T',
-		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
-			const result = parseTemplateParam(remaining, templateParams);
+		parse: (ctx) => {
+			const result = parseTemplateParam(ctx.remaining, ctx.templateParams);
 			if (result.typeStr) {
-				typeInfo.typeStr = result.typeStr;
+				ctx.typeInfo.typeStr = result.typeStr;
 				return result.str;
 			}
 			return null;
@@ -880,19 +874,19 @@ const TYPE_PARSERS = [
 	{
 		// Std types and substitutions (S...)
 		matches: (char) => char === 'S',
-		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
-			const result = parseStdType(remaining, substitutions);
-			typeInfo.typeStr = result.typeStr;
+		parse: (ctx) => {
+			const result = parseStdType(ctx.remaining, ctx.substitutions);
+			ctx.typeInfo.typeStr = result.typeStr;
 			return result.str;
 		}
 	},
 	{
 		// Custom type names (starts with digit or 'N' for namespace)
 		matches: (char) => !isNaN(parseInt(char, 10)) || char === 'N',
-		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
-			const result = popName(char + remaining);
-			typeInfo.typeStr = result.name;
-			substitutions.push(result.name);  // Add to substitutions for future references
+		parse: (ctx) => {
+			const result = popName(ctx.char + ctx.remaining);
+			ctx.typeInfo.typeStr = result.name;
+			ctx.substitutions.push(result.name);  // Add to substitutions for future references
 			return result.str;
 		}
 	}
@@ -914,22 +908,32 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 	const currentChar = qualifierResult.str[0];
 	const remainingAfterQualifiers = qualifierResult.str.slice(1);
 
-	// Handle template markers early (they don't need type info)
-	if (currentChar === 'I') {
-		return handleTemplateOpen(remainingAfterQualifiers, types, templateDepth, templateStack);
-	}
-	if (currentChar === 'E') {
-		return handleTemplateClose(remainingAfterQualifiers, templateDepth, templateStack);
-	}
-
-	// Create type info with qualifiers
-	const typeInfo = createTypeInfo();
-	Object.assign(typeInfo, qualifierResult.qualifiers);
-
 	// Find and execute matching parser strategy
 	for (const parser of TYPE_PARSERS) {
 		if (parser.matches(currentChar, qualifierResult.qualifiers)) {
-			const remainingStr = parser.parse(currentChar, remainingAfterQualifiers, qualifierResult.qualifiers, typeInfo, substitutions, templateParams);
+			// Create context object with all necessary data
+			const typeInfo = createTypeInfo();
+			Object.assign(typeInfo, qualifierResult.qualifiers);
+			
+			const ctx = {
+				char: currentChar,
+				remaining: remainingAfterQualifiers,
+				qualifiers: qualifierResult.qualifiers,
+				typeInfo: typeInfo,
+				substitutions: substitutions,
+				templateParams: templateParams,
+				types: types,
+				templateDepth: templateDepth,
+				templateStack: templateStack
+			};
+			
+			// Template markers return ParseResult directly
+			if (parser.isTemplateMarker) {
+				return parser.parse(ctx);
+			}
+			
+			// Regular type parsers return remaining string
+			const remainingStr = parser.parse(ctx);
 			
 			if (remainingStr !== null && typeInfo.typeStr) {
 				return new ParseResult(typeInfo, remainingStr, templateDepth, templateStack);
