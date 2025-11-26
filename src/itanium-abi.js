@@ -26,11 +26,82 @@ function parseLengthPrefixed(str) {
 }
 
 /**
- * Parses a single name segment (length-prefixed)
- * @param {string} str - String starting with a length prefix
+ * Maps operator codes to their C++ representations
+ * @param {string} code - Two-letter operator code
+ * @returns {string|null} Operator name or null if not an operator
+ */
+function getOperatorName(code) {
+	const operatorMap = {
+		'nw': 'operator new',
+		'na': 'operator new[]',
+		'dl': 'operator delete',
+		'da': 'operator delete[]',
+		'ps': 'operator+', // unary
+		'ng': 'operator-', // unary
+		'ad': 'operator&', // unary
+		'de': 'operator*', // unary
+		'co': 'operator~',
+		'pl': 'operator+',
+		'mi': 'operator-',
+		'ml': 'operator*',
+		'dv': 'operator/',
+		'rm': 'operator%',
+		'an': 'operator&',
+		'or': 'operator|',
+		'eo': 'operator^',
+		'aS': 'operator=',
+		'pL': 'operator+=',
+		'mI': 'operator-=',
+		'mL': 'operator*=',
+		'dV': 'operator/=',
+		'rM': 'operator%=',
+		'aN': 'operator&=',
+		'oR': 'operator|=',
+		'eO': 'operator^=',
+		'ls': 'operator<<',
+		'rs': 'operator>>',
+		'lS': 'operator<<=',
+		'rS': 'operator>>=',
+		'eq': 'operator==',
+		'ne': 'operator!=',
+		'lt': 'operator<',
+		'gt': 'operator>',
+		'le': 'operator<=',
+		'ge': 'operator>=',
+		'ss': 'operator<=>',
+		'nt': 'operator!',
+		'aa': 'operator&&',
+		'oo': 'operator||',
+		'pp': 'operator++',
+		'mm': 'operator--',
+		'cm': 'operator,',
+		'pm': 'operator->*',
+		'pt': 'operator->',
+		'cl': 'operator()',
+		'ix': 'operator[]',
+		'qu': 'operator?',
+		'cv': 'operator', // cast (type follows)
+		'li': 'operator""' // literal operator
+	};
+
+	return operatorMap[code] || null;
+}
+
+/**
+ * Parses a single name segment (length-prefixed or operator)
+ * @param {string} str - String starting with a length prefix or operator code
  * @returns {{segment: string, remaining: string}} Parsed segment info
  */
 function parseNameSegment(str) {
+	// Check for operator names (two characters, first is lowercase)
+	if (/^[a-z][a-zA-Z]/.test(str)) {
+		const opCode = str.slice(0, 2);
+		const opName = getOperatorName(opCode);
+		if (opName) {
+			return { segment: opName, remaining: str.slice(2) };
+		}
+	}
+	
 	const result = parseLengthPrefixed(str);
 
 	// Handle anonymous namespace
@@ -89,8 +160,8 @@ function parseNestedNamespace(str) {
 			break;
 		}
 		
-		// Must be a digit (length-prefixed segment)
-		if (!/\d/.test(firstChar)) {
+		// Must be a digit (length-prefixed segment) or lowercase letter (operator)
+		if (!/\d/.test(firstChar) && !/[a-z]/.test(firstChar)) {
 			break;
 		}
 
@@ -263,11 +334,12 @@ function getBasicTypeName(typeCode) {
 }
 
 /**
- * Parses std:: abbreviated types (S-codes)
+ * Parses std:: abbreviated types and substitutions (S-codes)
  * @param {string} str - String starting after 'S'
+ * @param {Array} substitutions - Array of previously seen types/names for substitutions
  * @returns {{typeStr: string, str: string}} Parsed type and remaining string
  */
-function parseStdType(str) {
+function parseStdType(str, substitutions = []) {
 	const stdTypeMap = {
 		'a': 'std::allocator',
 		'b': 'std::basic_string',
@@ -278,6 +350,25 @@ function parseStdType(str) {
 	};
 
 	const firstChar = str[0];
+
+	// Handle substitutions (S_ = first substitution, S0_ = second, etc.)
+	if (firstChar === '_') {
+		// S_ refers to the first substitution (index 0)
+		if (substitutions.length > 0) {
+			return { typeStr: substitutions[0], str: str.slice(1) };
+		}
+		return { typeStr: '', str: str.slice(1) };
+	}
+
+	// Handle numbered substitutions: S0_ = second, S1_ = third, etc.
+	const subMatch = /^(\d+)_/.exec(str);
+	if (subMatch) {
+		const index = parseInt(subMatch[1], 10) + 1;  // S0_ is index 1, S1_ is index 2
+		if (index < substitutions.length) {
+			return { typeStr: substitutions[index], str: str.slice(subMatch[0].length) };
+		}
+		return { typeStr: '', str: str.slice(subMatch[0].length) };
+	}
 
 	if (firstChar === 't') {
 		// It's a custom type name (St + name)
@@ -324,8 +415,17 @@ module.exports = {
 		const functionNameResult = popName(encoding);
 		const functionName = functionNameResult.name;
 
+		// Build substitution list: for member functions, the class/namespace is the first substitution
+		const substitutions = [];
+		if (functionName.includes('::')) {
+			// Extract class/namespace name (everything before the last ::)
+			const lastColonIndex = functionName.lastIndexOf('::');
+			const className = functionName.substring(0, lastColonIndex);
+			substitutions.push(className);
+		}
+
 		// Process the types
-		const parseResult = parseTypeList(functionNameResult.str);
+		const parseResult = parseTypeList(functionNameResult.str, substitutions);
 		const types = parseResult.types;
 
 		// Serialize types with proper template context awareness
@@ -339,9 +439,10 @@ module.exports = {
 /**
  * Parses the type list from the encoding
  * @param {string} encoding - The type encoding string
+ * @param {Array} substitutions - Array of substitutions for back-references
  * @returns {{types: Array}} Parsed types
  */
-function parseTypeList(encoding) {
+function parseTypeList(encoding, substitutions = []) {
 	const types = [];
 	let remainingEncoding = encoding;
 	let templateDepth = 0;
@@ -352,7 +453,8 @@ function parseTypeList(encoding) {
 			remainingEncoding,
 			types,
 			templateDepth,
-			templateStack
+			templateStack,
+			substitutions
 		);
 
 		if (typeInfo) {
@@ -447,9 +549,10 @@ function handleTemplateClose(remaining, templateDepth, templateStack) {
  * @param {Array} types - Current types array
  * @param {number} templateDepth - Current template nesting depth
  * @param {Array} templateStack - Current template stack
- * @returns {Object} Parse result with typeInfo and remaining string
+ * @param {Array} substitutions - Array of substitutions for back-references
+ * @returns {ParseResult} Parse result with typeInfo and remaining string
  */
-function parseSingleType(encoding, types, templateDepth, templateStack) {
+function parseSingleType(encoding, types, templateDepth, templateStack, substitutions = []) {
 	// Parse type qualifiers first
 	const qualifierResult = parseTypeQualifiers(encoding);
 	const currentChar = qualifierResult.str[0];
@@ -475,9 +578,9 @@ function parseSingleType(encoding, types, templateDepth, templateStack) {
 		return new ParseResult(typeInfo, remainingAfterQualifiers, templateDepth, templateStack);
 	}
 
-	// Try std abbreviated type
+	// Try std abbreviated type or substitution
 	if (currentChar === 'S') {
-		const stdResult = parseStdType(remainingAfterQualifiers);
+		const stdResult = parseStdType(remainingAfterQualifiers, substitutions);
 		typeInfo.typeStr = stdResult.typeStr;
 		return new ParseResult(typeInfo, stdResult.str, templateDepth, templateStack);
 	}

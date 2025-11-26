@@ -388,6 +388,259 @@ describe('nested namespaces', () => {
 	});
 });
 
+describe('operator overloading', () => {
+	describe('arithmetic operators', () => {
+		it('handles operator+', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberplERKS_"), "Number::operator+(const Number&)");
+			done();
+		});
+
+		it('handles operator-', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbermiERKS_"), "Number::operator-(const Number&)");
+			done();
+		});
+
+		it('handles operator*', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbermlERKS_"), "Number::operator*(const Number&)");
+			done();
+		});
+
+		it('handles operator/', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberdvERKS_"), "Number::operator/(const Number&)");
+			done();
+		});
+
+		it('handles operator%', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberrmERKS_"), "Number::operator%(const Number&)");
+			done();
+		});
+	});
+
+	describe('comparison operators', () => {
+		it('handles operator==', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbereqERKS_"), "Number::operator==(const Number&)");
+			done();
+		});
+
+		it('handles operator!=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberneERKS_"), "Number::operator!=(const Number&)");
+			done();
+		});
+
+		it('handles operator<', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberltERKS_"), "Number::operator<(const Number&)");
+			done();
+		});
+
+		it('handles operator>', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbergtERKS_"), "Number::operator>(const Number&)");
+			done();
+		});
+
+		it('handles operator<=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberleERKS_"), "Number::operator<=(const Number&)");
+			done();
+		});
+
+		it('handles operator>=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbergeERKS_"), "Number::operator>=(const Number&)");
+			done();
+		});
+
+		it('handles operator<=> (spaceship)', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberssERKS_"), "Number::operator<=>(const Number&)");
+			done();
+		});
+	});
+
+	describe('assignment operators', () => {
+		it('handles operator=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberaSERKS_"), "Number::operator=(const Number&)");
+			done();
+		});
+
+		it('handles operator+=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberpLERKS_"), "Number::operator+=(const Number&)");
+			done();
+		});
+
+		it('handles operator-=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbermIERKS_"), "Number::operator-=(const Number&)");
+			done();
+		});
+
+		it('handles operator*=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbermLERKS_"), "Number::operator*=(const Number&)");
+			done();
+		});
+
+		it('handles operator/=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberdVERKS_"), "Number::operator/=(const Number&)");
+			done();
+		});
+
+		it('handles operator%=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberrMERKS_"), "Number::operator%=(const Number&)");
+			done();
+		});
+	});
+
+	describe('bitwise operators', () => {
+		it('handles operator&', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberanERKS_"), "Number::operator&(const Number&)");
+			done();
+		});
+
+		it('handles operator|', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberorERKS_"), "Number::operator|(const Number&)");
+			done();
+		});
+
+		it('handles operator^', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbereoERKS_"), "Number::operator^(const Number&)");
+			done();
+		});
+
+		it('handles operator~', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbercoEv"), "Number::operator~(void)");
+			done();
+		});
+
+		it('handles operator<<', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberlsERKS_"), "Number::operator<<(const Number&)");
+			done();
+		});
+
+		it('handles operator>>', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberrsERKS_"), "Number::operator>>(const Number&)");
+			done();
+		});
+
+		it('handles operator&=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberaNERKS_"), "Number::operator&=(const Number&)");
+			done();
+		});
+
+		it('handles operator|=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberoRERKS_"), "Number::operator|=(const Number&)");
+			done();
+		});
+
+		it('handles operator^=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbereOERKS_"), "Number::operator^=(const Number&)");
+			done();
+		});
+
+		it('handles operator<<=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberlSERKS_"), "Number::operator<<=(const Number&)");
+			done();
+		});
+
+		it('handles operator>>=', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberrSERKS_"), "Number::operator>>=(const Number&)");
+			done();
+		});
+	});
+
+	describe('logical and increment operators', () => {
+		it('handles operator!', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberntEv"), "Number::operator!(void)");
+			done();
+		});
+
+		it('handles operator&&', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberaaERKS_"), "Number::operator&&(const Number&)");
+			done();
+		});
+
+		it('handles operator||', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberooERKS_"), "Number::operator||(const Number&)");
+			done();
+		});
+
+		it('handles operator++', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberppEv"), "Number::operator++(void)");
+			done();
+		});
+
+		it('handles operator--', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbermmEv"), "Number::operator--(void)");
+			done();
+		});
+	});
+
+	describe('special operators', () => {
+		it('handles operator()', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN7FunctorclEi"), "Functor::operator()(int)");
+			done();
+		});
+
+		it('handles operator[]', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN5ArrayixEi"), "Array::operator[](int)");
+			done();
+		});
+
+		it('handles operator->', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN7PointerptEv"), "Pointer::operator->(void)");
+			done();
+		});
+
+		it('handles operator->*', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN7PointerpmEi"), "Pointer::operator->*(int)");
+			done();
+		});
+
+		it('handles operator,', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumbercmERKS_"), "Number::operator,(const Number&)");
+			done();
+		});
+	});
+
+	describe('memory operators', () => {
+		it('handles operator new', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6ObjectnwEm"), "Object::operator new(unsigned long int)");
+			done();
+		});
+
+		it('handles operator new[]', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6ObjectnaEm"), "Object::operator new[](unsigned long int)");
+			done();
+		});
+
+		it('handles operator delete', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6ObjectdlEPv"), "Object::operator delete(void*)");
+			done();
+		});
+
+		it('handles operator delete[]', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6ObjectdaEPv"), "Object::operator delete[](void*)");
+			done();
+		});
+	});
+
+	describe('unary operators', () => {
+		it('handles unary operator+', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberpsEv"), "Number::operator+(void)");
+			done();
+		});
+
+		it('handles unary operator-', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberngEv"), "Number::operator-(void)");
+			done();
+		});
+
+		it('handles unary operator& (address-of)', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN6NumberadEv"), "Number::operator&(void)");
+			done();
+		});
+
+		it('handles unary operator* (dereference)', (done) => {
+			assert.equal(itanium_abi.demangle("_ZN7PointerdeEv"), "Pointer::operator*(void)");
+			done();
+		});
+	});
+});
+
 describe('edge cases', () => {
 	it('handles isMangled check for non-mangled name', (done) => {
 		assert.equal(itanium_abi.isMangled("regularFunction"), false);
