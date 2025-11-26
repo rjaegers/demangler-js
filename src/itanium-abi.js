@@ -19,8 +19,8 @@ function parseNameSegment(str) {
 	}
 	
 	const segmentLength = parseInt(lengthMatch[0], 10);
-	const afterLength = str.substr(lengthMatch[0].length);
-	let segment = afterLength.substr(0, segmentLength);
+	const afterLength = str.slice(lengthMatch[0].length);
+	let segment = afterLength.slice(0, segmentLength);
 	
 	// Handle anonymous namespace
 	if (segment === "_GLOBAL__N_1") {
@@ -28,7 +28,7 @@ function parseNameSegment(str) {
 	}
 	
 	const consumed = lengthMatch[0].length + segmentLength;
-	const remaining = afterLength.substr(segmentLength);
+	const remaining = afterLength.slice(segmentLength);
 	
 	return { segment, consumed, remaining };
 }
@@ -70,7 +70,7 @@ function popName(remainingString) {
 		isLastSegment = remainingString[0] !== "N";
 
 		// St means std:: in the mangled string
-		if (remainingString.substr(1, 2) === "St") {
+		if (remainingString.slice(1, 3) === "St") {
 			resultName += "std::";
 			remainingString = remainingString.replace("St", "");
 			consumedLength += 2;
@@ -79,7 +79,7 @@ function popName(remainingString) {
 		isEntity = isEntity || !isLastSegment;
 
 		if (!isLastSegment) {
-			remainingString = remainingString.substr(1); // Remove 'N'
+			remainingString = remainingString.slice(1); // Remove 'N'
 			consumedLength++;
 		}
 		
@@ -112,7 +112,7 @@ function popName(remainingString) {
 		consumedLength += 1;
 	}
 
-	return { name: resultName, str: originalString.substr(consumedLength) };
+	return { name: resultName, str: originalString.slice(consumedLength) };
 }
 
 /**
@@ -144,7 +144,7 @@ function parseTemplateIfPresent(str, currentName) {
 	
 	// Parse length-prefixed template arguments
 	let resultName = currentName + "<";
-	let remaining = str.substr(1); // Skip 'I'
+	let remaining = str.slice(1); // Skip 'I'
 	let consumed = 1;
 	const templateArgs = [];
 
@@ -155,11 +155,11 @@ function parseTemplateIfPresent(str, currentName) {
 		}
 		
 		const argLength = parseInt(argMatch[0], 10);
-		const afterArgLength = remaining.substr(argMatch[0].length);
-		const argName = afterArgLength.substr(0, argLength);
+		const afterArgLength = remaining.slice(argMatch[0].length);
+		const argName = afterArgLength.slice(0, argLength);
 		
 		templateArgs.push(argName);
-		remaining = afterArgLength.substr(argLength);
+		remaining = afterArgLength.slice(argLength);
 		consumed += argMatch[0].length + argLength;
 	}
 
@@ -167,7 +167,7 @@ function parseTemplateIfPresent(str, currentName) {
 	
 	if (remaining[0] === 'E') {
 		resultName += ">";
-		remaining = remaining.substr(1);
+		remaining = remaining.slice(1);
 		consumed++;
 	}
 	
@@ -326,7 +326,7 @@ module.exports = {
 		// Encoding is the part between the _Z (the "mangling mark") and the dot, that prefix
 		// a vendor specific suffix. That suffix will not be treated here yet
 		const dotIndex = name.indexOf('.');
-		const encoding = name.substr(2, dotIndex < 0 ? undefined : dotIndex - 2);
+		const encoding = dotIndex < 0 ? name.slice(2) : name.slice(2, dotIndex);
 
 	const functionNameResult = popName(encoding);
 	const functionName = functionNameResult.name;
