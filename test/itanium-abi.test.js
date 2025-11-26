@@ -698,13 +698,13 @@ describe('array types', () => {
 });
 
 describe('function pointers', () => {
-	it.skip('handles function pointer parameter (requires function pointer support)', (done) => {
+	it('handles function pointer parameter', (done) => {
 		assert.equal(itanium_abi.demangle("_Z8callbackPFviE"), "callback(void (*)(int))");
 		done();
 	});
 
-	it.skip('handles pointer to member function (requires member function pointer support)', (done) => {
-		assert.equal(itanium_abi.demangle("_Z10testMemberM6VectoriKFvvE"), "testMember(void (Vector::*)() const)");
+	it('handles pointer to member function', (done) => {
+		assert.equal(itanium_abi.demangle("_Z10testMemberiM6VectorKFvvE"), "testMember(int, void (Vector::*)() const)");
 		done();
 	});
 });
