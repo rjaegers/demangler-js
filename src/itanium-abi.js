@@ -8,28 +8,38 @@
  */
 
 /**
+ * Parses a length-prefixed string (common pattern in mangling)
+ * @param {string} str - String starting with a length prefix
+ * @returns {{value: string, remaining: string}} Parsed value and remaining string
+ */
+function parseLengthPrefixed(str) {
+	const lengthMatch = /(\d+)/.exec(str);
+	if (!lengthMatch || !lengthMatch[0]) {
+		return { value: "", remaining: str };
+	}
+	
+	const length = parseInt(lengthMatch[0], 10);
+	const afterLength = str.slice(lengthMatch[0].length);
+	const value = afterLength.slice(0, length);
+	const remaining = afterLength.slice(length);
+	
+	return { value, remaining };
+}
+
+/**
  * Parses a single name segment (length-prefixed)
  * @param {string} str - String starting with a length prefix
  * @returns {{segment: string, remaining: string}} Parsed segment info
  */
 function parseNameSegment(str) {
-	const lengthMatch = /(\d+)/.exec(str);
-	if (!lengthMatch || !lengthMatch[0]) {
-		return { segment: "", remaining: str };
-	}
-	
-	const segmentLength = parseInt(lengthMatch[0], 10);
-	const afterLength = str.slice(lengthMatch[0].length);
-	let segment = afterLength.slice(0, segmentLength);
+	const result = parseLengthPrefixed(str);
 	
 	// Handle anonymous namespace
-	if (segment === "_GLOBAL__N_1") {
-		segment = "(anonymous namespace)";
+	if (result.value === "_GLOBAL__N_1") {
+		return { segment: "(anonymous namespace)", remaining: result.remaining };
 	}
 	
-	const remaining = afterLength.slice(segmentLength);
-	
-	return { segment, remaining };
+	return { segment: result.value, remaining: result.remaining };
 }
 
 /**
@@ -125,17 +135,13 @@ function parseTemplateIfPresent(str, currentName) {
 	const templateArgs = [];
 
 	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const argMatch = /(\d+)/.exec(remaining);
-		if (!argMatch || !argMatch[0]) {
+		const result = parseLengthPrefixed(remaining);
+		if (!result.value) {
 			break; // Not a length-prefixed name, stop parsing templates
 		}
 		
-		const argLength = parseInt(argMatch[0], 10);
-		const afterArgLength = remaining.slice(argMatch[0].length);
-		const argName = afterArgLength.slice(0, argLength);
-		
-		templateArgs.push(argName);
-		remaining = afterArgLength.slice(argLength);
+		templateArgs.push(result.value);
+		remaining = result.remaining;
 	}
 
 	resultName += templateArgs.join(", ");
@@ -283,18 +289,18 @@ module.exports = {
 		const dotIndex = name.indexOf('.');
 		const encoding = dotIndex < 0 ? name.slice(2) : name.slice(2, dotIndex);
 
-	const functionNameResult = popName(encoding);
-	const functionName = functionNameResult.name;
+		const functionNameResult = popName(encoding);
+		const functionName = functionNameResult.name;
 
-	// Process the types
-	const parseResult = parseTypeList(functionNameResult.str);
-	const types = parseResult.types;
+		// Process the types
+		const parseResult = parseTypeList(functionNameResult.str);
+		const types = parseResult.types;
 
-	// Serialize types with proper template context awareness
-	const parameterList = serializeTypeList(types);
-	const signature = functionName + "(" + parameterList + ")";
-	
-	return signature;
+		// Serialize types with proper template context awareness
+		const parameterList = serializeTypeList(types);
+		const signature = functionName + "(" + parameterList + ")";
+		
+		return signature;
 	}
 };
 
@@ -334,6 +340,26 @@ function parseTypeList(encoding) {
 }
 
 /**
+ * Creates an empty type info object
+ * @returns {Object} Type info object with default values
+ */
+function createTypeInfo() {
+	return {
+		isBase: true,
+		typeStr: "",
+		isConst: false,
+		isVolatile: false,
+		isRestrict: false,
+		isRef: false,
+		isRValueRef: false,
+		numPtr: 0,
+		templateStart: false,
+		templateEnd: false,
+		templateType: null
+	};
+}
+
+/**
  * Parses a single type from the encoding
  * @param {string} encoding - The encoding string
  * @param {Array} types - Current types array
@@ -345,19 +371,7 @@ function parseSingleType(encoding, types, templateDepth, templateStack) {
 	let currentChar = encoding[0];
 	let remainingEncoding = encoding.slice(1);
 
-	const typeInfo = {
-		isBase: true,
-		typeStr: "",
-		isConst: false,
-		numPtr: 0,
-		isRValueRef: false,
-		isRef: false,
-		isRestrict: false,
-		templateStart: false,
-		templateEnd: false,
-		isVolatile: false,
-		templateType: null
-	};
+	const typeInfo = createTypeInfo();
 
 	// Parse type qualifiers (const, ptr, ref...)
 	const qualifierResult = parseTypeQualifiers(currentChar + remainingEncoding);
@@ -465,6 +479,19 @@ function serializeTypeList(types) {
  * @param {Object} typeInfo - The type info to format
  * @returns {string} Formatted type string
  */
+/**
+ * Formats reference and pointer qualifiers
+ * @param {Object} type - Type or template type object
+ * @returns {string} Formatted qualifiers
+ */
+function formatReferenceAndPointers(type) {
+	let result = "";
+	if (type.isRef) result += "&";
+	if (type.isRValueRef) result += "&&";
+	for (let i = 0; i < type.numPtr; i++) result += "*";
+	return result;
+}
+
 function formatTypeInfo(typeInfo) {
 	let result = "";
 	
@@ -477,16 +504,12 @@ function formatTypeInfo(typeInfo) {
 	if (typeInfo.templateEnd) result += ">";
 
 	if (!typeInfo.templateStart) {
-		if (typeInfo.isRef) result += "&";
-		if (typeInfo.isRValueRef) result += "&&";
-		for (let i = 0; i < typeInfo.numPtr; i++) result += "*";
+		result += formatReferenceAndPointers(typeInfo);
 		if (typeInfo.isRestrict) result += " __restrict";
 	}
 
 	if (typeInfo.templateType) {
-		if (typeInfo.templateType.isRef) result += "&";
-		if (typeInfo.templateType.isRValueRef) result += "&&";
-		for (let i = 0; i < typeInfo.templateType.numPtr; i++) result += "*";
+		result += formatReferenceAndPointers(typeInfo.templateType);
 	}
 
 	return result;
