@@ -30,7 +30,6 @@ the parameters.
 
 ## Roadmap
 
- - Support operators
  - Support Visual C++
  - Maybe support other languages, like Rust or Go.
 
