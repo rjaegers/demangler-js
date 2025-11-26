@@ -816,12 +816,96 @@ function handleTemplateClose(remaining, templateDepth, templateStack) {
 }
 
 /**
- * Parses a single type from the encoding
+ * Type parser registry using Strategy Pattern
+ * Each parser handles specific type codes and directly applies necessary side effects
+ */
+const TYPE_PARSERS = [
+	{
+		// Basic types (i, v, d, f, etc.)
+		matches: (char, qualifiers) => getBasicTypeName(char) !== null,
+		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
+			typeInfo.typeStr = getBasicTypeName(char);
+			return remaining;
+		}
+	},
+	{
+		// Array types (A<size>_<type>)
+		matches: (char) => char === 'A',
+		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
+			const result = parseArrayType(remaining, substitutions, templateParams);
+			if (result.typeStr) {
+				typeInfo.typeStr = result.typeStr;
+				return result.str;
+			}
+			return null;
+		}
+	},
+	{
+		// Function pointer types (PF<return><params>E)
+		matches: (char, qualifiers) => char === 'F' && qualifiers.numPtr > 0,
+		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
+			const result = parseFunctionType(remaining, substitutions, templateParams);
+			if (result.typeStr) {
+				typeInfo.typeStr = result.typeStr;
+				typeInfo.numPtr = 0;  // Function pointer notation already includes the pointer
+				return result.str;
+			}
+			return null;
+		}
+	},
+	{
+		// Member function pointer types (M<class><func>)
+		matches: (char) => char === 'M',
+		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
+			const result = parseMemberFunctionPointer(remaining, substitutions, templateParams);
+			if (result.typeStr) {
+				typeInfo.typeStr = result.typeStr;
+				return result.str;
+			}
+			return null;
+		}
+	},
+	{
+		// Template parameter placeholders (T_, T0_, T1_, etc.)
+		matches: (char) => char === 'T',
+		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
+			const result = parseTemplateParam(remaining, templateParams);
+			if (result.typeStr) {
+				typeInfo.typeStr = result.typeStr;
+				return result.str;
+			}
+			return null;
+		}
+	},
+	{
+		// Std types and substitutions (S...)
+		matches: (char) => char === 'S',
+		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
+			const result = parseStdType(remaining, substitutions);
+			typeInfo.typeStr = result.typeStr;
+			return result.str;
+		}
+	},
+	{
+		// Custom type names (starts with digit or 'N' for namespace)
+		matches: (char) => !isNaN(parseInt(char, 10)) || char === 'N',
+		parse: (char, remaining, qualifiers, typeInfo, substitutions, templateParams) => {
+			const result = popName(char + remaining);
+			typeInfo.typeStr = result.name;
+			substitutions.push(result.name);  // Add to substitutions for future references
+			return result.str;
+		}
+	}
+];
+
+/**
+ * Parses a single type from the encoding using Strategy Pattern
  * @param {string} encoding - The encoding string
  * @param {Array} types - Current types array
  * @param {number} templateDepth - Current template nesting depth
  * @param {Array} templateStack - Current template stack
  * @param {Array} substitutions - Array of substitutions for back-references
+ * @param {Array} templateParams - Template parameter types
  * @returns {ParseResult} Parse result with typeInfo and remaining string
  */
 function parseSingleType(encoding, types, templateDepth, templateStack, substitutions = [], templateParams = []) {
@@ -834,77 +918,23 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 	if (currentChar === 'I') {
 		return handleTemplateOpen(remainingAfterQualifiers, types, templateDepth, templateStack);
 	}
-
 	if (currentChar === 'E') {
 		return handleTemplateClose(remainingAfterQualifiers, templateDepth, templateStack);
 	}
 
-	// Create type info with qualifiers for all other cases
+	// Create type info with qualifiers
 	const typeInfo = createTypeInfo();
 	Object.assign(typeInfo, qualifierResult.qualifiers);
 
-	// Try basic type
-	const basicType = getBasicTypeName(currentChar);
-	if (basicType) {
-		typeInfo.typeStr = basicType;
-		return new ParseResult(typeInfo, remainingAfterQualifiers, templateDepth, templateStack);
-	}
-
-	// Try array type (A<size>_<type>)
-	if (currentChar === 'A') {
-		const arrayResult = parseArrayType(remainingAfterQualifiers, substitutions, templateParams);
-		if (arrayResult.typeStr) {
-			Object.assign(typeInfo, qualifierResult.qualifiers);
-			typeInfo.typeStr = arrayResult.typeStr;
-			return new ParseResult(typeInfo, arrayResult.str, templateDepth, templateStack);
+	// Find and execute matching parser strategy
+	for (const parser of TYPE_PARSERS) {
+		if (parser.matches(currentChar, qualifierResult.qualifiers)) {
+			const remainingStr = parser.parse(currentChar, remainingAfterQualifiers, qualifierResult.qualifiers, typeInfo, substitutions, templateParams);
+			
+			if (remainingStr !== null && typeInfo.typeStr) {
+				return new ParseResult(typeInfo, remainingStr, templateDepth, templateStack);
+			}
 		}
-	}
-
-	// Try function pointer type (PF<return><params>E) - P is already consumed by qualifiers
-	if (currentChar === 'F' && qualifierResult.qualifiers.numPtr > 0) {
-		const funcResult = parseFunctionType(remainingAfterQualifiers, substitutions, templateParams);
-		if (funcResult.typeStr) {
-			// Function pointer notation already includes the pointer, so reset numPtr
-			typeInfo.typeStr = funcResult.typeStr;
-			typeInfo.numPtr = 0;  // Don't add extra * since (*) is already in the notation
-			return new ParseResult(typeInfo, funcResult.str, templateDepth, templateStack);
-		}
-	}
-
-	// Try member function pointer type (M<class><func>)
-	if (currentChar === 'M') {
-		const memberFuncResult = parseMemberFunctionPointer(remainingAfterQualifiers, substitutions, templateParams);
-		if (memberFuncResult.typeStr) {
-			typeInfo.typeStr = memberFuncResult.typeStr;
-			return new ParseResult(typeInfo, memberFuncResult.str, templateDepth, templateStack);
-		}
-	}
-
-	// Try template parameter placeholder (T_, T0_, T1_, etc.)
-	if (currentChar === 'T') {
-		const templateResult = parseTemplateParam(remainingAfterQualifiers, templateParams);
-		if (templateResult.typeStr) {
-			typeInfo.typeStr = templateResult.typeStr;
-			// Don't add T_ resolution to substitutions - the template params are already there
-			// The QUALIFIED type (e.g., RT_ = int&) will be added later if needed
-			return new ParseResult(typeInfo, templateResult.str, templateDepth, templateStack);
-		}
-	}
-
-	// Try std abbreviated type or substitution
-	if (currentChar === 'S') {
-		const stdResult = parseStdType(remainingAfterQualifiers, substitutions);
-		typeInfo.typeStr = stdResult.typeStr;
-		return new ParseResult(typeInfo, stdResult.str, templateDepth, templateStack);
-	}
-
-	// Try custom type name (starts with digit or 'N' for namespace)
-	if (!isNaN(parseInt(currentChar, 10)) || currentChar === "N") {
-		const typeNameResult = popName(currentChar + remainingAfterQualifiers);
-		typeInfo.typeStr = typeNameResult.name;
-		// Add this type to the substitutions list for future S0_, S1_, etc. references
-		substitutions.push(typeNameResult.name);
-		return new ParseResult(typeInfo, typeNameResult.str, templateDepth, templateStack);
 	}
 
 	// Unknown type code - skip it
