@@ -256,3 +256,152 @@ describe('complex types', () => {
 		done();
 	});
 });
+
+describe('numeric types', () => {
+	it('receives float', (done) => {
+		assert.equal(itanium_abi.demangle("_Z9testFloatf"), "testFloat(float)");
+		done();
+	});
+
+	it('receives long double', (done) => {
+		assert.equal(itanium_abi.demangle("_Z14testLongDoublee"), "testLongDouble(long double)");
+		done();
+	});
+
+	it('receives __int128', (done) => {
+		assert.equal(itanium_abi.demangle("_Z10testInt128n"), "testInt128(__int128)");
+		done();
+	});
+
+	it('receives unsigned __int128', (done) => {
+		assert.equal(itanium_abi.demangle("_Z11testUInt128o"), "testUInt128(unsigned __int128)");
+		done();
+	});
+
+	it('receives __float128', (done) => {
+		assert.equal(itanium_abi.demangle("_Z12testFloat128g"), "testFloat128(__float128)");
+		done();
+	});
+
+	it('receives unsigned long long int', (done) => {
+		assert.equal(itanium_abi.demangle("_Z8testULLIy"), "testULLI(unsigned long long int)");
+		done();
+	});
+});
+
+describe('qualifiers and modifiers', () => {
+	it('receives const int', (done) => {
+		assert.equal(itanium_abi.demangle("_Z12testConstIntKi"), "testConstInt(const int)");
+		done();
+	});
+
+	it('receives volatile int', (done) => {
+		assert.equal(itanium_abi.demangle("_Z15testVolatileIntVi"), "testVolatileInt(volatile int)");
+		done();
+	});
+
+	it('receives const volatile int', (done) => {
+		assert.equal(itanium_abi.demangle("_Z20testConstVolatileIntVKi"), "testConstVolatileInt(const volatile int)");
+		done();
+	});
+
+	it('receives rvalue reference to int', (done) => {
+		assert.equal(itanium_abi.demangle("_Z16testRvalueRefIntOi"), "testRvalueRefInt(int&&)");
+		done();
+	});
+
+	it('receives multiple pointers', (done) => {
+		assert.equal(itanium_abi.demangle("_Z13testTriplePtrPPPi"), "testTriplePtr(int***)")
+		done();
+	});
+
+	it('receives pointer to const int', (done) => {
+		assert.equal(itanium_abi.demangle("_Z14testPtrToConstPKi"), "testPtrToConst(const int*)");
+		done();
+	});
+});
+
+describe('std abbreviated types', () => {
+	it('receives std::allocator', (done) => {
+		assert.equal(itanium_abi.demangle("_Z13testAllocatorSaIiE"), "testAllocator(std::allocator<int>)");
+		done();
+	});
+
+	it('receives std::basic_string', (done) => {
+		assert.equal(itanium_abi.demangle("_Z15testBasicStringSbIwE"), "testBasicString(std::basic_string<wchar_t>)");
+		done();
+	});
+
+	it('receives std::basic_istream', (done) => {
+		assert.equal(itanium_abi.demangle("_Z11testIstreamSi"), "testIstream(std::basic_istream<char, std::char_traits<char>>)");
+		done();
+	});
+
+	it('receives std::basic_ostream', (done) => {
+		assert.equal(itanium_abi.demangle("_Z11testOstreamSo"), "testOstream(std::basic_ostream<char, std::char_traits<char>>)");
+		done();
+	});
+
+	it('receives std::basic_iostream', (done) => {
+		assert.equal(itanium_abi.demangle("_Z12testIostreamSd"), "testIostream(std::basic_iostream<char, std::char_traits<char>>)");
+		done();
+	});
+
+	it('receives std::string (abbreviated)', (done) => {
+		assert.equal(itanium_abi.demangle("_Z10testStringSs"), "testString(std::basic_string<char, std::char_traits<char>, std::allocator<char>>)");
+		done();
+	});
+});
+
+describe('variadic functions', () => {
+	it('receives variadic arguments', (done) => {
+		assert.equal(itanium_abi.demangle("_Z6printfPKcz"), "printf(const char*, ...)");
+		done();
+	});
+});
+
+describe('multiple parameters', () => {
+	it('receives multiple types mixed', (done) => {
+		assert.equal(itanium_abi.demangle("_Z11mixedParamsibfdPKc"), 
+			"mixedParams(int, bool, float, double, const char*)");
+		done();
+	});
+
+	it('receives pointers and references mixed', (done) => {
+		assert.equal(itanium_abi.demangle("_Z9mixedModsPiRiOi"), 
+			"mixedMods(int*, int&, int&&)");
+		done();
+	});
+});
+
+describe('nested namespaces', () => {
+	it('handles deeply nested namespaces', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN5outer5inner4deep8functionEv"), 
+			"outer::inner::deep::function(void)");
+		done();
+	});
+
+	it('handles namespace with custom type', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN2ns8functionEN4data6customE"), 
+			"ns::function(data::custom)");
+		done();
+	});
+});
+
+describe('edge cases', () => {
+	it('handles isMangled check for non-mangled name', (done) => {
+		assert.equal(itanium_abi.isMangled("regularFunction"), false);
+		done();
+	});
+
+	it('handles isMangled check for mangled name', (done) => {
+		assert.equal(itanium_abi.isMangled("_Z5isInti"), true);
+		done();
+	});
+
+	it('handles vendor-specific suffix with dot', (done) => {
+		// Name with vendor suffix should be handled (suffix ignored)
+		assert.equal(itanium_abi.demangle("_Z5isInti.constprop.0"), "isInt(int)");
+		done();
+	});
+});
