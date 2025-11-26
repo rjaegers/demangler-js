@@ -39,11 +39,7 @@ function parseNameSegment(str) {
  * @returns {boolean} True if more segments follow
  */
 function hasMoreSegments(str, isEntity) {
-	if (!isEntity) {
-		return false;
-	}
-	
-	if (str.length === 0) {
+	if (!isEntity || !str.length) {
 		return false;
 	}
 	
@@ -90,15 +86,12 @@ function popName(remainingString) {
 			remainingString = templateResult.str;
 		}
 
-		// Add :: separator if more segments follow
-		if (hasMoreSegments(remainingString, isEntity)) {
-			resultName += "::";
-			isLastSegment = false;
-		} else if (isEntity) {
-			isLastSegment = true;
-		} else if (!isLastSegment) {
+		// Determine if more segments follow
+		const moreSegments = hasMoreSegments(remainingString, isEntity);
+		if (moreSegments) {
 			resultName += "::";
 		}
+		isLastSegment = !moreSegments && (isEntity || isLastSegment);
 	}
 
 	if (isEntity && remainingString[0] === 'E') {
@@ -106,15 +99,6 @@ function popName(remainingString) {
 	}
 
 	return { name: resultName, str: remainingString };
-}
-
-/**
- * Extracts the first character from a string
- * @param {string} str - The string to process
- * @returns {{ch: string, str: string}} First character and remaining string
- */
-function popChar(str) {
-	return { ch: str[0], str: str.slice(1) };
 }
 
 /**
@@ -190,37 +174,18 @@ function parseTypeQualifiers(str) {
 		numPtr: 0
 	};
 	
-	let continueQualifiers = true;
-	while (continueQualifiers) {
-		const ch = str[0];
-		switch (ch) {
-			case 'R':
-				qualifiers.isRef = true;
-				str = str.slice(1);
-				break;
-			case 'O':
-				qualifiers.isRValueRef = true;
-				str = str.slice(1);
-				break;
-			case 'r':
-				qualifiers.isRestrict = true;
-				str = str.slice(1);
-				break;
-			case 'V':
-				qualifiers.isVolatile = true;
-				str = str.slice(1);
-				break;
-			case 'K':
-				qualifiers.isConst = true;
-				str = str.slice(1);
-				break;
-			case 'P':
-				qualifiers.numPtr++;
-				str = str.slice(1);
-				break;
-			default:
-				continueQualifiers = false;
-		}
+	const qualifierMap = {
+		'R': () => qualifiers.isRef = true,
+		'O': () => qualifiers.isRValueRef = true,
+		'r': () => qualifiers.isRestrict = true,
+		'V': () => qualifiers.isVolatile = true,
+		'K': () => qualifiers.isConst = true,
+		'P': () => qualifiers.numPtr++
+	};
+	
+	while (qualifierMap[str[0]]) {
+		qualifierMap[str[0]]();
+		str = str.slice(1);
 	}
 	
 	return { qualifiers, str };
@@ -345,27 +310,24 @@ function parseTypeList(encoding) {
 	let templateStack = [];
 
 	while (remainingEncoding.length > 0) {
-		const parseResult = parseSingleType(
+		const { typeInfo, remaining, templateDepth: newDepth, templateStack: newStack, skip } = parseSingleType(
 			remainingEncoding,
 			types,
 			templateDepth,
 			templateStack
 		);
 		
-		if (parseResult.skip) {
-			remainingEncoding = parseResult.remaining;
-			templateDepth = parseResult.templateDepth;
-			templateStack = parseResult.templateStack;
+		if (typeInfo) {
+			types.push(typeInfo);
+		}
+		
+		remainingEncoding = remaining;
+		templateDepth = newDepth;
+		templateStack = newStack;
+		
+		if (skip) {
 			continue;
 		}
-		
-		if (parseResult.typeInfo) {
-			types.push(parseResult.typeInfo);
-		}
-		
-		remainingEncoding = parseResult.remaining;
-		templateDepth = parseResult.templateDepth;
-		templateStack = parseResult.templateStack;
 	}
 	
 	return { types };
