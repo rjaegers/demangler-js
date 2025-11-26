@@ -88,17 +88,28 @@ function getOperatorName(code) {
 }
 
 /**
- * Parses a single name segment (length-prefixed or operator)
- * @param {string} str - String starting with a length prefix or operator code
- * @returns {{segment: string, remaining: string}} Parsed segment info
+ * Parses a single name segment (length-prefixed, operator, constructor, or destructor)
+ * @param {string} str - String starting with a length prefix or special code
+ * @param {string} className - Current class name for constructor/destructor naming
+ * @returns {{segment: string, remaining: string, isSpecial: boolean}} Parsed segment info
  */
-function parseNameSegment(str) {
+function parseNameSegment(str, className = '') {
+	// Check for constructors (C1, C2, C3)
+	if (/^C[123]/.test(str)) {
+		return { segment: className, remaining: str.slice(2), isSpecial: true };
+	}
+	
+	// Check for destructors (D0, D1, D2)
+	if (/^D[012]/.test(str)) {
+		return { segment: '~' + className, remaining: str.slice(2), isSpecial: true };
+	}
+	
 	// Check for operator names (two characters, first is lowercase)
 	if (/^[a-z][a-zA-Z]/.test(str)) {
 		const opCode = str.slice(0, 2);
 		const opName = getOperatorName(opCode);
 		if (opName) {
-			return { segment: opName, remaining: str.slice(2) };
+			return { segment: opName, remaining: str.slice(2), isSpecial: false };
 		}
 	}
 	
@@ -106,10 +117,10 @@ function parseNameSegment(str) {
 
 	// Handle anonymous namespace
 	if (result.value === "_GLOBAL__N_1") {
-		return { segment: "(anonymous namespace)", remaining: result.remaining };
+		return { segment: "(anonymous namespace)", remaining: result.remaining, isSpecial: false };
 	}
 
-	return { segment: result.value, remaining: result.remaining };
+	return { segment: result.value, remaining: result.remaining, isSpecial: false };
 }
 
 /**
@@ -139,11 +150,18 @@ function startsWithStdMarker(str) {
 /**
  * Parses a nested namespace path (starts with 'N', ends with 'E')
  * @param {string} str - String starting with 'N'
- * @returns {{name: string, str: string}} Parsed namespace path and remaining string
+ * @returns {{name: string, str: string, isConst: boolean}} Parsed namespace path, remaining string, and const qualifier
  */
 function parseNestedNamespace(str) {
 	let remaining = str.slice(1); // Skip 'N'
 	const segments = [];
+	let isConst = false;
+	
+	// Check for const qualifier (K after N)
+	if (remaining[0] === 'K') {
+		isConst = true;
+		remaining = remaining.slice(1);
+	}
 
 	// Handle std:: prefix
 	if (startsWithStdMarker(str)) {
@@ -160,13 +178,16 @@ function parseNestedNamespace(str) {
 			break;
 		}
 		
-		// Must be a digit (length-prefixed segment) or lowercase letter (operator)
-		if (!/\d/.test(firstChar) && !/[a-z]/.test(firstChar)) {
+		// Must be a digit, lowercase letter (operator), or C/D (constructor/destructor)
+		if (!/\d/.test(firstChar) && !/[a-zCD]/.test(firstChar)) {
 			break;
 		}
 
+		// Get the current class name (last non-special segment) for constructor/destructor
+		const className = segments.length > 0 ? segments[segments.length - 1].replace(/^operator.*/, '').trim() : '';
+		
 		// Parse one segment
-		const segmentResult = parseNameSegment(remaining);
+		const segmentResult = parseNameSegment(remaining, className);
 		if (!segmentResult.segment) {
 			break;
 		}
@@ -188,7 +209,7 @@ function parseNestedNamespace(str) {
 		remaining = remaining.slice(1);
 	}
 
-	return { name: segments.join("::"), str: remaining };
+	return { name: segments.join("::"), str: remaining, isConst: isConst };
 }
 
 /**
@@ -206,12 +227,12 @@ function popName(remainingString) {
 	// Simple case: single name segment
 	const segmentResult = parseNameSegment(remainingString);
 	if (!segmentResult.segment) {
-		return { name: "", str: remainingString };
+		return { name: "", str: remainingString, isConst: false };
 	}
 
 	// Check for template arguments
 	const templateResult = parseTemplateIfPresent(segmentResult.remaining, segmentResult.segment);
-	return { name: templateResult.name, str: templateResult.str };
+	return { name: templateResult.name, str: templateResult.str, isConst: false };
 }
 
 /**
@@ -351,7 +372,7 @@ function parseStdType(str, substitutions = []) {
 
 	const firstChar = str[0];
 
-	// Handle substitutions (S_ = first substitution, S0_ = second, etc.)
+	// Handle substitutions (S_ = first substitution, S0_ = first, S1_ = second, etc.)
 	if (firstChar === '_') {
 		// S_ refers to the first substitution (index 0)
 		if (substitutions.length > 0) {
@@ -360,10 +381,10 @@ function parseStdType(str, substitutions = []) {
 		return { typeStr: '', str: str.slice(1) };
 	}
 
-	// Handle numbered substitutions: S0_ = second, S1_ = third, etc.
+	// Handle numbered substitutions: S0_ = first (same as S_), S1_ = second, S2_ = third, etc.
 	const subMatch = /^(\d+)_/.exec(str);
 	if (subMatch) {
-		const index = parseInt(subMatch[1], 10) + 1;  // S0_ is index 1, S1_ is index 2
+		const index = parseInt(subMatch[1], 10);  // S0_ is index 0, S1_ is index 1, S2_ is index 2
 		if (index < substitutions.length) {
 			return { typeStr: substitutions[index], str: str.slice(subMatch[0].length) };
 		}
@@ -414,6 +435,7 @@ module.exports = {
 
 		const functionNameResult = popName(encoding);
 		const functionName = functionNameResult.name;
+		const isConst = functionNameResult.isConst || false;
 
 		// Build substitution list: for member functions, the class/namespace is the first substitution
 		const substitutions = [];
@@ -430,7 +452,12 @@ module.exports = {
 
 		// Serialize types with proper template context awareness
 		const parameterList = serializeTypeList(types);
-		const signature = functionName + "(" + parameterList + ")";
+		let signature = functionName + "(" + parameterList + ")";
+		
+		// Add const qualifier for member functions
+		if (isConst) {
+			signature += " const";
+		}
 
 		return signature;
 	}
@@ -589,6 +616,8 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 	if (!isNaN(parseInt(currentChar, 10)) || currentChar === "N") {
 		const typeNameResult = popName(currentChar + remainingAfterQualifiers);
 		typeInfo.typeStr = typeNameResult.name;
+		// Add this type to the substitutions list for future S0_, S1_, etc. references
+		substitutions.push(typeNameResult.name);
 		return new ParseResult(typeInfo, typeNameResult.str, templateDepth, templateStack);
 	}
 

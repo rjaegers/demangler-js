@@ -1,5 +1,3 @@
-/* Test the itanium abi compatibility */
-
 const assert = require('assert');
 const itanium_abi = require('./../src/itanium-abi');
 
@@ -246,13 +244,6 @@ describe('std types', () => {
 		assert.equal(itanium_abi.demangle(
 			"_Z10test_queueSt5queueIfSt5dequeIfSaIfEEE"),
 			"test_queue(std::queue<float, std::deque<float, std::allocator<float>>>)");
-		done();
-	});
-});
-
-describe('complex types', () => {
-	it('demangles templated type in anonymous namespace', (done) => {
-		assert.equal(itanium_abi.demangle("_ZN12_GLOBAL__N_128gtest_suite_PrimeTableTest2_24ReturnsFalseForNonPrimesI18OnTheFlyPrimeTableE8TestBodyEv"), "(anonymous namespace)::gtest_suite_PrimeTableTest2_::ReturnsFalseForNonPrimes<OnTheFlyPrimeTable>::TestBody(void)");
 		done();
 	});
 });
@@ -641,6 +632,95 @@ describe('operator overloading', () => {
 	});
 });
 
+describe('constructors and destructors', () => {
+	it('handles constructor', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN6VectorC1Ev"), "Vector::Vector(void)");
+		done();
+	});
+
+	it('handles constructor with parameters', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN6VectorC1Eii"), "Vector::Vector(int, int)");
+		done();
+	});
+
+	it('handles destructor', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN6VectorD1Ev"), "Vector::~Vector(void)");
+		done();
+	});
+
+	it('handles copy constructor', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN6VectorC1ERKS_"), "Vector::Vector(const Vector&)");
+		done();
+	});
+});
+
+describe('const member functions', () => {
+	it('handles const member function', (done) => {
+		assert.equal(itanium_abi.demangle("_ZNK6Vector4sizeEv"), "Vector::size(void) const");
+		done();
+	});
+
+	it('handles const member function with parameters', (done) => {
+		assert.equal(itanium_abi.demangle("_ZNK6Vector2atEi"), "Vector::at(int) const");
+		done();
+	});
+});
+
+describe('static and const qualifiers', () => {
+	it('handles pointer to pointer to const', (done) => {
+		assert.equal(itanium_abi.demangle("_Z8testPtrsPPKi"), "testPtrs(const int**)");
+		done();
+	});
+});
+
+describe('template functions', () => {
+	it.skip('handles simple template function (requires template parameter support)', (done) => {
+		assert.equal(itanium_abi.demangle("_Z3maxIiET_S0_S0_"), "max(int, int)");
+		done();
+	});
+
+	it.skip('handles template with multiple types (requires template parameter support)', (done) => {
+		assert.equal(itanium_abi.demangle("_Z4swapIiEvRT_S1_"), "swap(int&, int&)");
+		done();
+	});
+});
+
+describe('array types', () => {
+	it.skip('handles simple array (requires array type support)', (done) => {
+		assert.equal(itanium_abi.demangle("_Z9testArrayA10_i"), "testArray(int[10])");
+		done();
+	});
+
+	it.skip('handles multidimensional arrays (requires array type support)', (done) => {
+		assert.equal(itanium_abi.demangle("_Z9test2DArrayA10_A20_i"), "test2DArray(int[10][20])");
+		done();
+	});
+});
+
+describe('function pointers', () => {
+	it.skip('handles function pointer parameter (requires function pointer support)', (done) => {
+		assert.equal(itanium_abi.demangle("_Z8callbackPFviE"), "callback(void (*)(int))");
+		done();
+	});
+
+	it.skip('handles pointer to member function (requires member function pointer support)', (done) => {
+		assert.equal(itanium_abi.demangle("_Z10testMemberM6VectoriKFvvE"), "testMember(void (Vector::*)() const)");
+		done();
+	});
+});
+
+describe('complex substitutions', () => {
+	it('handles multiple back-references', (done) => {
+		assert.equal(itanium_abi.demangle("_Z8functionN3foo3barES0_S0_"), "function(foo::bar, foo::bar, foo::bar)");
+		done();
+	});
+
+	it('handles nested type substitutions', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN6Vector4pushERKS_"), "Vector::push(const Vector&)");
+		done();
+	});
+});
+
 describe('edge cases', () => {
 	it('handles isMangled check for non-mangled name', (done) => {
 		assert.equal(itanium_abi.isMangled("regularFunction"), false);
@@ -652,9 +732,24 @@ describe('edge cases', () => {
 		done();
 	});
 
+	it('demangles templated type in anonymous namespace', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN12_GLOBAL__N_128gtest_suite_PrimeTableTest2_24ReturnsFalseForNonPrimesI18OnTheFlyPrimeTableE8TestBodyEv"), "(anonymous namespace)::gtest_suite_PrimeTableTest2_::ReturnsFalseForNonPrimes<OnTheFlyPrimeTable>::TestBody(void)");
+		done();
+	});
+
 	it('handles vendor-specific suffix with dot', (done) => {
-		// Name with vendor suffix should be handled (suffix ignored)
 		assert.equal(itanium_abi.demangle("_Z5isInti.constprop.0"), "isInt(int)");
+		done();
+	});
+
+	it('handles empty parameter list explicitly', (done) => {
+		assert.equal(itanium_abi.demangle("_Z8functionv"), "function(void)");
+		done();
+	});
+
+	it('handles very long names', (done) => {
+		assert.equal(itanium_abi.demangle("_Z49thisIsAVeryLongFunctionNameWithManyCharactersInItv"), 
+			"thisIsAVeryLongFunctionNameWithManyCharactersInIt(void)");
 		done();
 	});
 });
