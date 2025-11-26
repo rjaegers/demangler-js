@@ -340,6 +340,17 @@ function getBasicTypeName(typeCode) {
 }
 
 /**
+ * Helper function to parse a single type with common default parameters
+ * @param {string} str - The string to parse
+ * @param {Array} substitutions - Array of substitutions for back-references
+ * @param {Array} templateParams - Template parameter types
+ * @returns {{typeInfo: Object, remaining: string}} Parsed type info and remaining string
+ */
+function parseTypeHelper(str, substitutions = [], templateParams = []) {
+	return parseSingleType(str, [], 0, [], substitutions, templateParams);
+}
+
+/**
  * Parses array types (A<size>_<element-type>)
  * @param {string} str - String after 'A'
  * @param {Array} substitutions - Array of substitutions for back-references
@@ -357,14 +368,7 @@ function parseArrayType(str, substitutions = [], templateParams = []) {
 	let remaining = str.slice(sizeMatch[0].length);
 
 	// Parse the element type recursively
-	const { typeInfo, remaining: afterType } = parseSingleType(
-		remaining,
-		[],
-		0,
-		[],
-		substitutions,
-		templateParams
-	);
+	const { typeInfo, remaining: afterType } = parseTypeHelper(remaining, substitutions, templateParams);
 
 	if (!typeInfo) {
 		return { typeStr: '', str: str };
@@ -388,25 +392,18 @@ function parseArrayType(str, substitutions = [], templateParams = []) {
 }
 
 /**
- * Parses function pointer types (PF<return><params>E)
- * @param {string} str - String after 'F'
+ * Parses a function signature (return type and parameters until 'E')
+ * @param {string} str - String starting with return type
  * @param {Array} substitutions - Array of substitutions for back-references
  * @param {Array} templateParams - Template parameter types
- * @returns {{typeStr: string, str: string}} The parsed function pointer type and remaining string
+ * @returns {{returnType: Object, params: Array, remaining: string}} Parsed signature components
  */
-function parseFunctionType(str, substitutions = [], templateParams = []) {
+function parseFunctionSignature(str, substitutions = [], templateParams = []) {
 	// Parse return type
-	const { typeInfo: returnType, remaining: afterReturn } = parseSingleType(
-		str,
-		[],
-		0,
-		[],
-		substitutions,
-		templateParams
-	);
+	const { typeInfo: returnType, remaining: afterReturn } = parseTypeHelper(str, substitutions, templateParams);
 
 	if (!returnType) {
-		return { typeStr: '', str: str };
+		return { returnType: null, params: [], remaining: str };
 	}
 
 	// Parse parameter types until 'E'
@@ -414,14 +411,7 @@ function parseFunctionType(str, substitutions = [], templateParams = []) {
 	let remaining = afterReturn;
 
 	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { typeInfo: paramType, remaining: afterParam } = parseSingleType(
-			remaining,
-			[],
-			0,
-			[],
-			substitutions,
-			templateParams
-		);
+		const { typeInfo: paramType, remaining: afterParam } = parseTypeHelper(remaining, substitutions, templateParams);
 
 		if (paramType) {
 			params.push(formatTypeInfo(paramType));
@@ -434,17 +424,41 @@ function parseFunctionType(str, substitutions = [], templateParams = []) {
 		remaining = remaining.slice(1);
 	}
 
+	return { returnType, params, remaining };
+}
+
+/**
+ * Formats parameter list, handling empty lists and void parameters
+ * @param {Array} params - Array of parameter type strings
+ * @returns {string} Formatted parameter list
+ */
+function formatParameterList(params) {
+	if (params.length === 0) {
+		return '';
+	} else if (params.length === 1 && params[0] === 'void') {
+		return '';  // Single void parameter means empty list
+	} else {
+		return params.join(', ');
+	}
+}
+
+/**
+ * Parses function pointer types (PF<return><params>E)
+ * @param {string} str - String after 'F'
+ * @param {Array} substitutions - Array of substitutions for back-references
+ * @param {Array} templateParams - Template parameter types
+ * @returns {{typeStr: string, str: string}} The parsed function pointer type and remaining string
+ */
+function parseFunctionType(str, substitutions = [], templateParams = []) {
+	const { returnType, params, remaining } = parseFunctionSignature(str, substitutions, templateParams);
+
+	if (!returnType) {
+		return { typeStr: '', str: str };
+	}
+
 	// Format as: return_type (*)(param1, param2, ...)
 	const returnTypeStr = formatTypeInfo(returnType);
-	// Handle empty parameter list: show () instead of (void)
-	let paramsStr;
-	if (params.length === 0) {
-		paramsStr = '';
-	} else if (params.length === 1 && params[0] === 'void') {
-		paramsStr = '';  // Single void parameter means empty list
-	} else {
-		paramsStr = params.join(', ');
-	}
+	const paramsStr = formatParameterList(params);
 	const funcType = `${returnTypeStr} (*)(${paramsStr})`;
 
 	return { typeStr: funcType, str: remaining };
@@ -459,14 +473,7 @@ function parseFunctionType(str, substitutions = [], templateParams = []) {
  */
 function parseMemberFunctionPointer(str, substitutions = [], templateParams = []) {
 	// Parse the class type (length-prefixed name or type)
-	const { typeInfo: classType, remaining: afterClass } = parseSingleType(
-		str,
-		[],
-		0,
-		[],
-		substitutions,
-		templateParams
-	);
+	const { typeInfo: classType, remaining: afterClass } = parseTypeHelper(str, substitutions, templateParams);
 
 	if (!classType) {
 		return { typeStr: '', str: str };
@@ -489,60 +496,19 @@ function parseMemberFunctionPointer(str, substitutions = [], templateParams = []
 
 	remaining = remaining.slice(1); // Skip 'F'
 
-	// Parse return type
-	const { typeInfo: returnType, remaining: afterReturn } = parseSingleType(
-		remaining,
-		[],
-		0,
-		[],
-		substitutions,
-		templateParams
-	);
+	const { returnType, params, remaining: afterSignature } = parseFunctionSignature(remaining, substitutions, templateParams);
 
 	if (!returnType) {
 		return { typeStr: '', str: str };
 	}
 
-	// Parse parameter types until 'E'
-	const params = [];
-	remaining = afterReturn;
-
-	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { typeInfo: paramType, remaining: afterParam } = parseSingleType(
-			remaining,
-			[],
-			0,
-			[],
-			substitutions,
-			templateParams
-		);
-
-		if (paramType) {
-			params.push(formatTypeInfo(paramType));
-		}
-		remaining = afterParam;
-	}
-
-	// Skip the closing 'E'
-	if (remaining[0] === 'E') {
-		remaining = remaining.slice(1);
-	}
-
 	// Format as: return_type (ClassName::*)(param1, param2, ...) [const]
 	const returnTypeStr = formatTypeInfo(returnType);
-	// Handle empty parameter list: show () instead of (void)
-	let paramsStr;
-	if (params.length === 0) {
-		paramsStr = '';
-	} else if (params.length === 1 && params[0] === 'void') {
-		paramsStr = '';  // Single void parameter means empty list
-	} else {
-		paramsStr = params.join(', ');
-	}
+	const paramsStr = formatParameterList(params);
 	const constStr = isConst ? ' const' : '';
 	const funcType = `${returnTypeStr} (${className}::*)(${paramsStr})${constStr}`;
 
-	return { typeStr: funcType, str: remaining };
+	return { typeStr: funcType, str: afterSignature };
 }
 
 /**
@@ -682,14 +648,7 @@ module.exports = {
 
 		// For function templates, skip the return type (it comes after template params but before parameter types)
 		if (templateParams.length > 0 && remainingAfterTemplate.length > 0) {
-			const { remaining: afterReturnType } = parseSingleType(
-				remainingAfterTemplate,
-				[],
-				0,
-				[],
-				substitutions,
-				templateParams
-			);
+			const { remaining: afterReturnType } = parseTypeHelper(remainingAfterTemplate, substitutions, templateParams);
 			remainingAfterTemplate = afterReturnType;
 		}
 
@@ -726,13 +685,7 @@ function parseTemplatePlaceholders(str) {
 
 	// Parse types until we hit 'E'
 	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { typeInfo, remaining: newRemaining } = parseSingleType(
-			remaining,
-			[],
-			0,
-			[],
-			tempSubstitutions
-		);
+		const { typeInfo, remaining: newRemaining } = parseTypeHelper(remaining, tempSubstitutions, []);
 
 		if (typeInfo) {
 			templateParams.push(typeInfo);
