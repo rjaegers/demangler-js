@@ -32,7 +32,7 @@ function popName(str) {
 		if (str.substr(1, 2) === "St") {
 			namestr = namestr.concat("std::");
 			str = str.replace("St", "");
-			rlen++;
+			rlen += 2; // Consumed "St"
 		}
 
 		/* This is used for us to know we'll find an E in the end of this name
@@ -40,24 +40,91 @@ function popName(str) {
 		*/
 		isEntity = isEntity || !isLast;
 
-		if (!isLast)
-			str = str.substr(1);
+		if (!isLast) {
+			str = str.substr(1); // Remove 'N'
+			rlen++; // Consumed 'N'
+		}		// Parse one segment (length-prefixed name)
+		const res = /(\d+)/.exec(str);
+		if (res && res[0]) {
+			const len = parseInt(res[0], 10);
+			const strstart = str.substr(res[0].length);
+			let segment = strstart.substr(0, len);
 
-		const res = /(\d*)/.exec(str);
+			// Handle anonymous namespace
+			if (segment === "_GLOBAL__N_1") {
+				segment = "(anonymous namespace)";
+			}
 
-		const len = parseInt(res[0], 10);
+			namestr = namestr.concat(segment);
+			str = strstart.substr(len);
+			rlen += res[0].length + len;
 
-		rlen += res[0].length + len;
+			// Check for template arguments in the name (I...E)
+			// Only parse if template args are length-prefixed names, not type codes
+			if (str[0] === 'I') {
+				// Look ahead to see if the template arg is a length-prefixed name or a type code
+				const nextChar = str[1];
+				if (nextChar && /\d/.test(nextChar)) {
+					// It's a length-prefixed name, we can parse it
+					namestr = namestr.concat("<");
+					str = str.substr(1); // Skip 'I'
+					rlen++;
 
-		const strstart = str.substr(res[0].length);
-		namestr = namestr.concat(strstart.substr(0, len));
+					let firstArg = true;
+					while (str.length > 0 && str[0] !== 'E') {
+						if (!firstArg) {
+							namestr = namestr.concat(", ");
+						}
+						firstArg = false;
 
-		if (!isLast) namestr = namestr.concat("::");
-		str = strstart.substr(len);
+						// Parse template argument as a length-prefixed name
+						const argRes = /(\d+)/.exec(str);
+						if (argRes && argRes[0]) {
+							const argLen = parseInt(argRes[0], 10);
+							const argStart = str.substr(argRes[0].length);
+							const argName = argStart.substr(0, argLen);
+							namestr = namestr.concat(argName);
+							str = argStart.substr(argLen);
+							rlen += argRes[0].length + argLen;
+						} else {
+							// Not a length-prefixed name, stop parsing templates
+							break;
+						}
+					}
+
+					if (str[0] === 'E') {
+						namestr = namestr.concat(">");
+						str = str.substr(1); // Skip 'E'
+						rlen++;
+					}
+				}
+				// If next char is not a digit (it's a type code), don't parse templates here
+			}
+		}
+
+		// Add :: separator if this isn't the last segment
+		// For entities, check if more segments follow before the E
+		// For non-entities, check if outer loop will continue
+		// Stop at 'I' (template start) - templates are handled by main demangle loop
+		if (isEntity) {
+			// Continue parsing if more length-prefixed names follow
+			if (str.length > 0 && str[0] !== 'E' && str[0] !== 'I' && /\d/.test(str[0])) {
+				namestr = namestr.concat("::");
+				// Keep going in the outer while loop
+				isLast = false;
+			} else {
+				// We've hit E, I, or non-digit, so this is the last segment
+				isLast = true;
+			}
+		} else if (!isLast) {
+			// Non-entity, but not the last in a namespace chain
+			namestr = namestr.concat("::");
+		}
 	}
 
-	if (isEntity)
-		rlen += 2; // Take out the "E", the entity end mark
+	if (isEntity && str[0] === 'E') {
+		rlen += 1; // Take out the "E", the entity end mark
+	}
 
 	return { name: namestr, str: ostr.substr(rlen) };
 }
@@ -142,7 +209,7 @@ module.exports = {
 
 					switch (process.ch) {
 						case 't': {
-							// It's a custom type name
+							// It's a custom type name (St + name)
 							const tname = popName(process.str);
 							typeInfo.typeStr = "std::".concat(tname.name);
 							process.str = tname.str;
@@ -155,7 +222,14 @@ module.exports = {
 						case 'o': typeInfo.typeStr = "std::basic_ostream<char, std::char_traits<char>>"; break;
 						case 'd': typeInfo.typeStr = "std::basic_iostream<char, std::char_traits<char>>"; break;
 						default:
-							process.str = process.ch.concat(process.str);
+							// Check for other std types by reading the name
+							if (!isNaN(parseInt(process.ch, 10))) {
+								const tname = popName(process.ch.concat(process.str));
+								typeInfo.typeStr = "std::".concat(tname.name);
+								process.str = tname.str;
+							} else {
+								process.str = process.ch.concat(process.str);
+							}
 							break;
 					}
 
@@ -163,11 +237,14 @@ module.exports = {
 
 				case 'I':
 					// Template open bracket (<)
-					types[types.length - 1].templateStart = true;
-					template_types.push(types[types.length - 1]);
+					if (types.length > 0) {
+						types[types.length - 1].templateStart = true;
+						template_types.push(types[types.length - 1]);
+					}
 					template_count++;
-
-					break;
+					// Don't push a new type, just advance the string
+					str = process.str;
+					continue;
 				case 'E':
 					// Template closing bracket (>)
 					if ((template_count <= 0)) {
@@ -249,6 +326,6 @@ module.exports = {
 		*/
 
 		return functionname.concat("(" + typelist.join(', ') + ")").replace(/<, /g, "<")
-			.replace(/<, /g, "<").replace(/, >/g, ">").replace(/, </g, "<");
+			.replace(/<, /g, "<").replace(/, >/g, ">").replace(/, </g, "<").replace(/>, >/g, ">>");
 	}
 };
