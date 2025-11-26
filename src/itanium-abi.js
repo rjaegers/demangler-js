@@ -10,12 +10,12 @@
 /**
  * Parses a single name segment (length-prefixed)
  * @param {string} str - String starting with a length prefix
- * @returns {{segment: string, consumed: number, remaining: string}} Parsed segment info
+ * @returns {{segment: string, remaining: string}} Parsed segment info
  */
 function parseNameSegment(str) {
 	const lengthMatch = /(\d+)/.exec(str);
 	if (!lengthMatch || !lengthMatch[0]) {
-		return { segment: "", consumed: 0, remaining: str };
+		return { segment: "", remaining: str };
 	}
 	
 	const segmentLength = parseInt(lengthMatch[0], 10);
@@ -27,10 +27,9 @@ function parseNameSegment(str) {
 		segment = "(anonymous namespace)";
 	}
 	
-	const consumed = lengthMatch[0].length + segmentLength;
 	const remaining = afterLength.slice(segmentLength);
 	
-	return { segment, consumed, remaining };
+	return { segment, remaining };
 }
 
 /**
@@ -62,8 +61,6 @@ function popName(remainingString) {
 	// The name is in the format <length><str>
 	let isLastSegment = false;
 	let resultName = "";
-	let consumedLength = 0;
-	const originalString = remainingString;
 	let isEntity = false;
 
 	while (!isLastSegment) {
@@ -73,14 +70,12 @@ function popName(remainingString) {
 		if (remainingString.slice(1, 3) === "St") {
 			resultName += "std::";
 			remainingString = remainingString.replace("St", "");
-			consumedLength += 2;
 		}
 
 		isEntity = isEntity || !isLastSegment;
 
 		if (!isLastSegment) {
 			remainingString = remainingString.slice(1); // Remove 'N'
-			consumedLength++;
 		}
 		
 		// Parse one segment (length-prefixed name)
@@ -88,13 +83,11 @@ function popName(remainingString) {
 		if (segmentResult.segment) {
 			resultName += segmentResult.segment;
 			remainingString = segmentResult.remaining;
-			consumedLength += segmentResult.consumed;
 
 			// Check for template arguments in the name (I...E)
 			const templateResult = parseTemplateIfPresent(remainingString, resultName);
 			resultName = templateResult.name;
 			remainingString = templateResult.str;
-			consumedLength += templateResult.consumed;
 		}
 
 		// Add :: separator if more segments follow
@@ -109,10 +102,10 @@ function popName(remainingString) {
 	}
 
 	if (isEntity && remainingString[0] === 'E') {
-		consumedLength += 1;
+		remainingString = remainingString.slice(1);
 	}
 
-	return { name: resultName, str: originalString.slice(consumedLength) };
+	return { name: resultName, str: remainingString };
 }
 
 /**
@@ -128,24 +121,23 @@ function popChar(str) {
  * Parses template arguments if present in the mangled name
  * @param {string} str - The string starting with potential template marker 'I'
  * @param {string} currentName - The name being built
- * @returns {{name: string, str: string, consumed: number}} Updated name, remaining string, and consumed length
+ * @returns {{name: string, str: string}} Updated name and remaining string
  */
 function parseTemplateIfPresent(str, currentName) {
 	// Early returns for non-template cases
 	if (str[0] !== 'I') {
-		return { name: currentName, str: str, consumed: 0 };
+		return { name: currentName, str: str };
 	}
 	
 	const nextChar = str[1];
 	if (!nextChar || !/\d/.test(nextChar)) {
 		// If next char is not a digit (it's a type code), don't parse templates here
-		return { name: currentName, str: str, consumed: 0 };
+		return { name: currentName, str: str };
 	}
 	
 	// Parse length-prefixed template arguments
 	let resultName = currentName + "<";
 	let remaining = str.slice(1); // Skip 'I'
-	let consumed = 1;
 	const templateArgs = [];
 
 	while (remaining.length > 0 && remaining[0] !== 'E') {
@@ -160,7 +152,6 @@ function parseTemplateIfPresent(str, currentName) {
 		
 		templateArgs.push(argName);
 		remaining = afterArgLength.slice(argLength);
-		consumed += argMatch[0].length + argLength;
 	}
 
 	resultName += templateArgs.join(", ");
@@ -168,10 +159,9 @@ function parseTemplateIfPresent(str, currentName) {
 	if (remaining[0] === 'E') {
 		resultName += ">";
 		remaining = remaining.slice(1);
-		consumed++;
 	}
 	
-	return { name: resultName, str: remaining, consumed: consumed };
+	return { name: resultName, str: remaining };
 }
 
 /**
