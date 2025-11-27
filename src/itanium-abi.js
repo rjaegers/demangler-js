@@ -259,9 +259,19 @@ function parseSegmentWithTemplate(remaining, className) {
 
 	// Check for template arguments on this segment
 	if (newRemaining[0] === 'I') {
-		const templateResult = parseTemplateIfPresent(newRemaining, segment);
-		segment = templateResult.name;
-		newRemaining = templateResult.str;
+		// Check if next character is a digit (length-prefixed name) or type code
+		const nextChar = newRemaining[1];
+		if (nextChar && /\d/.test(nextChar)) {
+			// Length-prefixed template arguments
+			const templateResult = parseTemplateIfPresent(newRemaining, segment);
+			segment = templateResult.name;
+			newRemaining = templateResult.str;
+		} else if (nextChar) {
+			// Type-code-based template arguments
+			const templateResult = parseTypeCodeTemplateArgs(newRemaining, segment, []);
+			segment = templateResult.name;
+			newRemaining = templateResult.str;
+		}
 	}
 
 	return { segment, remaining: newRemaining };
@@ -354,9 +364,47 @@ function popName(remainingString) {
 		return { name: "", str: remainingString, isConst: false };
 	}
 
-	// Check for template arguments
+	// Check for template arguments (only length-prefixed, not type-code templates)
+	// Type-code templates (IiE, etc.) are handled by parseTemplatePlaceholders in the main flow
 	const templateResult = parseTemplateIfPresent(segmentResult.remaining, segmentResult.segment);
 	return { name: templateResult.name, str: templateResult.str, isConst: false };
+}
+
+/**
+ * Parses type-code-based template arguments (e.g., IiSaIiEE)
+ * @param {string} str - The string to parse (starting with 'I')
+ * @param {string} currentName - The name being built
+ * @param {Array} substitutions - Array of substitutions for back-references
+ * @returns {{name: string, str: string}} Updated name and remaining string
+ */
+function parseTypeCodeTemplateArgs(str, currentName, substitutions = []) {
+	if (str[0] !== 'I') {
+		return { name: currentName, str: str };
+	}
+
+	let remaining = str.slice(1); // Skip 'I'
+	const templateArgs = [];
+	const tempSubstitutions = [...substitutions];
+
+	// Parse types until we hit 'E'
+	while (remaining.length > 0 && remaining[0] !== 'E') {
+		const { typeInfo, remaining: newRemaining } = parseTypeHelper(remaining, tempSubstitutions, []);
+
+		if (typeInfo) {
+			templateArgs.push(typeInfo.toString());
+		} else {
+			break;
+		}
+		remaining = newRemaining;
+	}
+
+	// Skip the closing 'E'
+	if (remaining[0] === 'E') {
+		remaining = remaining.slice(1);
+	}
+
+	const resultName = currentName + "<" + templateArgs.join(", ") + ">";
+	return { name: resultName, str: remaining };
 }
 
 /**
@@ -982,8 +1030,27 @@ const TYPE_PARSERS = [
 		matches: (char) => char === 'S',
 		parse: (ctx) => {
 			const result = parseStdType(ctx.remaining, ctx.substitutions);
-			ctx.typeInfo.typeStr = result.typeStr;
-			return result.str;
+			let typeStr = result.typeStr;
+			let remaining = result.str;
+			
+			// Check for template arguments after the std type
+			if (remaining[0] === 'I') {
+				const nextChar = remaining[1];
+				if (nextChar && /\d/.test(nextChar)) {
+					// Length-prefixed template arguments
+					const templateResult = parseTemplateIfPresent(remaining, typeStr);
+					typeStr = templateResult.name;
+					remaining = templateResult.str;
+				} else if (nextChar) {
+					// Type-code-based template arguments
+					const templateResult = parseTypeCodeTemplateArgs(remaining, typeStr, ctx.substitutions);
+					typeStr = templateResult.name;
+					remaining = templateResult.str;
+				}
+			}
+			
+			ctx.typeInfo.typeStr = typeStr;
+			return remaining;
 		}
 	},
 	{

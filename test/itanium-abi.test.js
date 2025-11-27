@@ -683,6 +683,11 @@ describe('template functions', () => {
 		assert.equal(itanium_abi.demangle("_Z4swapIiEvRT_S1_"), "swap(int&, int&)");
 		done();
 	});
+
+	it('handles complex templated member function', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN3std6vectorIiSaIiEE9push_backERKi"), "std::vector<int, std::allocator<int>>::push_back(const int&)");
+		done();
+	});
 });
 
 describe('array types', () => {
@@ -750,6 +755,128 @@ describe('edge cases', () => {
 	it('handles very long names', (done) => {
 		assert.equal(itanium_abi.demangle("_Z49thisIsAVeryLongFunctionNameWithManyCharactersInItv"), 
 			"thisIsAVeryLongFunctionNameWithManyCharactersInIt(void)");
+		done();
+	});
+});
+
+describe('error handling and edge cases', () => {
+	it('handles malformed nested namespace', (done) => {
+		// This tests the error path when namespace parsing encounters unexpected end
+		assert.equal(itanium_abi.demangle("_ZN"), "()");
+		done();
+	});
+
+	it('handles empty segment in namespace', (done) => {
+		// Tests parseSegmentWithTemplate when segment is null (empty namespace)
+		assert.equal(itanium_abi.demangle("_ZNE"), "()");
+		done();
+	});
+
+	it('handles invalid segment start character', (done) => {
+		// Tests isValidSegmentStart failure path (treats as empty namespace)
+		assert.equal(itanium_abi.demangle("_ZN#E"), "()");
+		done();
+	});
+
+	it('handles template parameter with no params available', (done) => {
+		// Tests parseTemplateParam when templateParams array is empty (returns empty, becomes void)
+		assert.equal(itanium_abi.demangle("_Z3fooT_"), "foo()");
+		done();
+	});
+
+	it('handles template parameter index out of bounds', (done) => {
+		// Tests parseTemplateParam when index >= templateParams.length (returns empty, shown as _)
+		assert.equal(itanium_abi.demangle("_Z3fooT9_"), "foo(_)");
+		done();
+	});
+
+	it('handles unknown std type code', (done) => {
+		// Tests parseStdType fallback for unknown code (returns variadic ...)
+		assert.equal(itanium_abi.demangle("_Z3fooSz"), "foo(...)");
+		done();
+	});
+
+	it('handles substitution with empty substitutions array', (done) => {
+		// Tests parseStdType when substitutions is empty (returns empty string, becomes void)
+		assert.equal(itanium_abi.demangle("_Z3fooS_"), "foo()");
+		done();
+	});
+
+	it('handles substitution index out of bounds', (done) => {
+		// Tests parseStdType when index >= substitutions.length (returns empty, shown as _)
+		assert.equal(itanium_abi.demangle("_Z3fooS99_"), "foo(_)");
+		done();
+	});
+
+	it('handles array type without valid element type', (done) => {
+		// Tests parseArrayType early return when no valid typeInfo (returns empty, shown as _)
+		assert.equal(itanium_abi.demangle("_Z3fooA5_"), "foo(_)");
+		done();
+	});
+
+	it('handles function pointer without valid return type', (done) => {
+		// Tests parseFunctionType early return when no returnType
+		assert.equal(itanium_abi.demangle("_Z3fooPF"), "foo()");
+		done();
+	});
+
+	it('handles member function pointer without class type', (done) => {
+		// Tests parseMemberFunctionPointer early return when no classType
+		assert.equal(itanium_abi.demangle("_Z3fooM"), "foo()");
+		done();
+	});
+
+	it('handles member function pointer missing F marker', (done) => {
+		// Tests parseMemberFunctionPointer when remaining[0] !== 'F' (parses Bar as regular type)
+		assert.equal(itanium_abi.demangle("_Z3fooM3Bar"), "foo(Bar)");
+		done();
+	});
+
+	it('handles member function pointer without return type', (done) => {
+		// Tests parseMemberFunctionPointer when no returnType after F (parses Bar as regular type)
+		assert.equal(itanium_abi.demangle("_Z3fooM3BarF"), "foo(Bar)");
+		done();
+	});
+
+	it('handles unknown type code', (done) => {
+		// Tests parseSingleType fallback for unknown type code
+		assert.equal(itanium_abi.demangle("_Z3fooQ"), "foo()");
+		done();
+	});
+
+	it('handles template type on TypeInfo', (done) => {
+		// Tests TypeInfo.toString() with templateType (reference qualifiers on template)
+		assert.equal(itanium_abi.demangle("_Z3fooRi"), "foo(int&)");
+		done();
+	});
+
+	it('handles malformed operator code', (done) => {
+		// Tests getOperatorName returning null - 'zz' is variadic and gets parsed as two 'z' (...)
+		assert.equal(itanium_abi.demangle("_ZN3FoozzEv"), "Foo(..., ..., void)");
+		done();
+	});
+
+	it('handles function pointer type', (done) => {
+		// Tests parseFunctionType - PFi is function pointer returning int
+		assert.equal(itanium_abi.demangle("_Z3fooPFiE"), "foo(int (*)())");
+		done();
+	});
+
+	it('handles parseTemplateIfPresent with non-digit after I', (done) => {
+		// Tests early return in parseTemplateIfPresent when next char is not a digit
+		assert.equal(itanium_abi.demangle("_Z3fooIiE"), "foo()");
+		done();
+	});
+
+	it('handles std::string type code', (done) => {
+		// Tests std::string abbreviated type (Ss)
+		assert.equal(itanium_abi.demangle("_Z3fooSs"), "foo(std::basic_string<char, std::char_traits<char>, std::allocator<char>>)");
+		done();
+	});
+
+	it('handles parseStdType with digit (std:: custom)', (done) => {
+		// Tests parseStdType when firstChar is a digit
+		assert.equal(itanium_abi.demangle("_Z3fooS6vector"), "foo(std::vector)");
 		done();
 	});
 });
