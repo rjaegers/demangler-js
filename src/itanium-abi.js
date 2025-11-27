@@ -1,7 +1,7 @@
 /**
  * Demangles C++ function names mangled according to the IA64 C++ ABI
  *
- * This is means that this file demangles function names mangled by GCC and Clang.
+ * This means that this file demangles function names mangled by GCC and Clang.
  *
  * Material used: https://itanium-cxx-abi.github.io/cxx-abi/abi.html#mangling
  */
@@ -50,7 +50,7 @@ module.exports = {
 		// Template parameters themselves become substitution candidates
 		if (templateParams.length > 0) {
 			for (const param of templateParams) {
-				substitutions.push(formatTypeInfo(param));
+				substitutions.push(param.toString());
 			}
 		}
 
@@ -96,11 +96,6 @@ function parseLengthPrefixed(str) {
 	return { value, remaining };
 }
 
-/**
- * Maps operator codes to their C++ representations
- * @param {string} code - Two-letter operator code
- * @returns {string|null} Operator name or null if not an operator
- */
 function getOperatorName(code) {
 	const operatorMap = {
 		'nw': 'operator new',
@@ -195,15 +190,6 @@ function parseNameSegment(str, className = '') {
 }
 
 /**
- * Checks if string starts with std:: marker
- * @param {string} str - String to check
- * @returns {boolean} True if starts with St marker
- */
-function startsWithStdMarker(str) {
-	return str.slice(1, 3) === "St";
-}
-
-/**
  * Checks if character can start a namespace segment
  * @param {string} char - Character to check
  * @returns {boolean} True if valid segment start
@@ -250,7 +236,7 @@ function parseConstQualifier(str) {
  * @returns {{segments: Array<string>, remaining: string}} Segments and remaining string
  */
 function parseStdPrefix(originalStr, remaining) {
-	if (startsWithStdMarker(originalStr)) {
+	if (originalStr.slice(1, 3) === "St") {
 		return { segments: ["std"], remaining: remaining.replace("St", "") };
 	}
 	return { segments: [], remaining };
@@ -529,7 +515,7 @@ function parseArrayType(str, substitutions = [], templateParams = []) {
 
 	// Format as type[size]
 	// For nested arrays, we need to insert the new dimension before existing dimensions
-	const elementType = formatTypeInfo(typeInfo);
+	const elementType = typeInfo.toString();
 	
 	// Check if element type is already an array (contains '[')
 	const arrayMatch = /^(.+?)(\[.+\])$/.exec(elementType);
@@ -567,7 +553,7 @@ function parseFunctionSignature(str, substitutions = [], templateParams = []) {
 		const { typeInfo: paramType, remaining: afterParam } = parseTypeHelper(remaining, substitutions, templateParams);
 
 		if (paramType) {
-			params.push(formatTypeInfo(paramType));
+			params.push(paramType.toString());
 		}
 		remaining = afterParam;
 	}
@@ -610,7 +596,7 @@ function parseFunctionType(str, substitutions = [], templateParams = []) {
 	}
 
 	// Format as: return_type (*)(param1, param2, ...)
-	const returnTypeStr = formatTypeInfo(returnType);
+	const returnTypeStr = returnType.toString();
 	const paramsStr = formatParameterList(params);
 	const funcType = `${returnTypeStr} (*)(${paramsStr})`;
 
@@ -632,7 +618,7 @@ function parseMemberFunctionPointer(str, substitutions = [], templateParams = []
 		return { typeStr: '', str: str };
 	}
 
-	const className = formatTypeInfo(classType);
+	const className = classType.toString();
 	let remaining = afterClass;
 
 	// Check for const qualifier (K) before function signature
@@ -656,7 +642,7 @@ function parseMemberFunctionPointer(str, substitutions = [], templateParams = []
 	}
 
 	// Format as: return_type (ClassName::*)(param1, param2, ...) [const]
-	const returnTypeStr = formatTypeInfo(returnType);
+	const returnTypeStr = returnType.toString();
 	const paramsStr = formatParameterList(params);
 	const constStr = isConst ? ' const' : '';
 	const funcType = `${returnTypeStr} (${className}::*)(${paramsStr})${constStr}`;
@@ -676,7 +662,7 @@ function parseTemplateParam(str, templateParams = []) {
 	// T_ = first template parameter (index 0)
 	if (firstChar === '_') {
 		if (templateParams.length > 0) {
-			return { typeStr: formatTypeInfo(templateParams[0]), str: str.slice(1) };
+			return { typeStr: templateParams[0].toString(), str: str.slice(1) };
 		}
 		return { typeStr: '', str: str.slice(1) };
 	}
@@ -686,7 +672,7 @@ function parseTemplateParam(str, templateParams = []) {
 	if (match) {
 		const index = parseInt(match[1], 10);
 		if (index < templateParams.length) {
-			return { typeStr: formatTypeInfo(templateParams[index]), str: str.slice(match[0].length) };
+			return { typeStr: templateParams[index].toString(), str: str.slice(match[0].length) };
 		}
 		return { typeStr: '', str: str.slice(match[0].length) };
 	}
@@ -811,7 +797,7 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 			// Add the complete type (with qualifiers) to substitutions for future references
 			// But skip template markers
 			if (!typeInfo.templateStart && !typeInfo.templateEnd) {
-				substitutions.push(formatTypeInfo(typeInfo));
+				substitutions.push(typeInfo.toString());
 			}
 		}
 
@@ -824,23 +810,61 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 }
 
 /**
- * Creates an empty type info object
- * @returns {Object} Type info object with default values
+ * Represents type information with formatting capabilities
  */
-function createTypeInfo() {
-	return {
-		isBase: true,
-		typeStr: "",
-		isConst: false,
-		isVolatile: false,
-		isRestrict: false,
-		isRef: false,
-		isRValueRef: false,
-		numPtr: 0,
-		templateStart: false,
-		templateEnd: false,
-		templateType: null
-	};
+class TypeInfo {
+	constructor() {
+		this.isBase = true;
+		this.typeStr = "";
+		this.isConst = false;
+		this.isVolatile = false;
+		this.isRestrict = false;
+		this.isRef = false;
+		this.isRValueRef = false;
+		this.numPtr = 0;
+		this.templateStart = false;
+		this.templateEnd = false;
+		this.templateType = null;
+	}
+
+	/**
+	 * Formats reference and pointer qualifiers
+	 * @returns {string} Formatted qualifiers
+	 */
+	formatReferenceAndPointers() {
+		let result = "";
+		if (this.isRef) result += "&";
+		if (this.isRValueRef) result += "&&";
+		result += "*".repeat(this.numPtr);
+		return result;
+	}
+
+	/**
+	 * Formats the type info into its string representation
+	 * @returns {string} Formatted type string
+	 */
+	toString() {
+		let result = "";
+
+		if (this.isConst) result += "const ";
+		if (this.isVolatile) result += "volatile ";
+
+		result += this.typeStr;
+
+		if (this.templateStart) result += "<";
+		if (this.templateEnd) result += ">";
+
+		if (!this.templateStart) {
+			result += this.formatReferenceAndPointers();
+			if (this.isRestrict) result += " __restrict";
+		}
+
+		if (this.templateType) {
+			result += this.templateType.formatReferenceAndPointers();
+		}
+
+		return result;
+	}
 }
 
 /**
@@ -994,7 +1018,7 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 	for (const parser of TYPE_PARSERS) {
 		if (parser.matches(currentChar, qualifierResult.qualifiers)) {
 			// Create context object with all necessary data
-			const typeInfo = createTypeInfo();
+			const typeInfo = new TypeInfo();
 			Object.assign(typeInfo, qualifierResult.qualifiers);
 			
 			const ctx = {
@@ -1067,7 +1091,7 @@ function processTypeForSerialization(type, result, index, prevType, templateDept
 		newDepth++;
 	}
 
-	result.push(formatTypeInfo(type));
+	result.push(type.toString());
 
 	if (type.templateEnd) {
 		newDepth--;
@@ -1092,45 +1116,4 @@ function serializeTypeList(types) {
 	}
 
 	return result.join('');
-}
-
-/**
- * Formats reference and pointer qualifiers
- * @param {Object} type - Type or template type object
- * @returns {string} Formatted qualifiers
- */
-function formatReferenceAndPointers(type) {
-	let result = "";
-	if (type.isRef) result += "&";
-	if (type.isRValueRef) result += "&&";
-	result += "*".repeat(type.numPtr);
-	return result;
-}
-
-/**
- * Formats a type info object into its string representation
- * @param {Object} typeInfo - The type info to format
- * @returns {string} Formatted type string
- */
-function formatTypeInfo(typeInfo) {
-	let result = "";
-
-	if (typeInfo.isConst) result += "const ";
-	if (typeInfo.isVolatile) result += "volatile ";
-
-	result += typeInfo.typeStr;
-
-	if (typeInfo.templateStart) result += "<";
-	if (typeInfo.templateEnd) result += ">";
-
-	if (!typeInfo.templateStart) {
-		result += formatReferenceAndPointers(typeInfo);
-		if (typeInfo.isRestrict) result += " __restrict";
-	}
-
-	if (typeInfo.templateType) {
-		result += formatReferenceAndPointers(typeInfo.templateType);
-	}
-
-	return result;
 }
