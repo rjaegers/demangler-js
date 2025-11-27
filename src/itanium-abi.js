@@ -258,21 +258,9 @@ function parseSegmentWithTemplate(remaining, className) {
 	let newRemaining = segmentResult.remaining;
 
 	// Check for template arguments on this segment
-	if (newRemaining[0] === 'I') {
-		// Check if next character is a digit (length-prefixed name) or type code
-		const nextChar = newRemaining[1];
-		if (nextChar && /\d/.test(nextChar)) {
-			// Length-prefixed template arguments
-			const templateResult = parseTemplateIfPresent(newRemaining, segment);
-			segment = templateResult.name;
-			newRemaining = templateResult.str;
-		} else if (nextChar) {
-			// Type-code-based template arguments
-			const templateResult = parseTypeCodeTemplateArgs(newRemaining, segment, []);
-			segment = templateResult.name;
-			newRemaining = templateResult.str;
-		}
-	}
+	const withTemplates = attachTemplateArgsIfPresent(newRemaining, segment, []);
+	segment = withTemplates.typeName;
+	newRemaining = withTemplates.remaining;
 
 	return { segment, remaining: newRemaining };
 }
@@ -368,6 +356,34 @@ function popName(remainingString) {
 	// Type-code templates (IiE, etc.) are handled by parseTemplatePlaceholders in the main flow
 	const templateResult = parseTemplateIfPresent(segmentResult.remaining, segmentResult.segment);
 	return { name: templateResult.name, str: templateResult.str, isConst: false };
+}
+
+/**
+ * Parses and attaches template arguments to a type name if present
+ * @param {string} remaining - String potentially starting with 'I'
+ * @param {string} typeName - The base type name
+ * @param {Array} substitutions - Array of substitutions for back-references
+ * @returns {{typeName: string, remaining: string}} Updated type name and remaining string
+ */
+function attachTemplateArgsIfPresent(remaining, typeName, substitutions = []) {
+	if (remaining[0] !== 'I') {
+		return { typeName, remaining };
+	}
+	
+	const nextChar = remaining[1];
+	if (!nextChar) {
+		return { typeName, remaining };
+	}
+	
+	if (/\d/.test(nextChar)) {
+		// Length-prefixed template arguments
+		const result = parseTemplateIfPresent(remaining, typeName);
+		return { typeName: result.name, remaining: result.str };
+	} else {
+		// Type-code-based template arguments
+		const result = parseTypeCodeTemplateArgs(remaining, typeName, substitutions);
+		return { typeName: result.name, remaining: result.str };
+	}
 }
 
 /**
@@ -491,39 +507,6 @@ function parseTypeQualifiers(str) {
 	}
 
 	return { qualifiers, str };
-}
-
-/**
- * Maps mangled type codes to their C++ type names
- * @param {string} typeCode - Single character type code
- * @returns {string|null} Type name or null if not a basic type
- */
-function getBasicTypeName(typeCode) {
-	const typeMap = {
-		'v': 'void',
-		'w': 'wchar_t',
-		'b': 'bool',
-		'c': 'char',
-		'a': 'signed char',
-		'h': 'unsigned char',
-		's': 'short',
-		't': 'unsigned short',
-		'i': 'int',
-		'j': 'unsigned int',
-		'l': 'long int',
-		'm': 'unsigned long int',
-		'x': 'long long int',
-		'y': 'unsigned long long int',
-		'n': '__int128',
-		'o': 'unsigned __int128',
-		'f': 'float',
-		'd': 'double',
-		'e': 'long double',
-		'g': '__float128',
-		'z': '...'
-	};
-
-	return typeMap[typeCode] || null;
 }
 
 /**
@@ -942,10 +925,10 @@ const TYPE_PARSERS = [
 		// Template opening marker 'I'
 		matches: (char) => char === 'I',
 		parse: (ctx) => {
-			// This is a special case - returns a ParseResult directly
-			if (ctx.types.length > 0) {
-				ctx.types[ctx.types.length - 1].templateStart = true;
-				ctx.templateStack.push(ctx.types[ctx.types.length - 1]);
+			const lastType = ctx.types[ctx.types.length - 1];
+			if (lastType) {
+				lastType.templateStart = true;
+				ctx.templateStack.push(lastType);
 			}
 			return new ParseResult(null, ctx.remaining, ctx.templateDepth + 1, ctx.templateStack);
 		},
@@ -970,9 +953,34 @@ const TYPE_PARSERS = [
 	},
 	{
 		// Basic types (i, v, d, f, etc.)
-		matches: (char, qualifiers) => getBasicTypeName(char) !== null,
-		parse: (ctx) => {
-			ctx.typeInfo.typeStr = getBasicTypeName(ctx.char);
+		basicTypes: {
+			'v': 'void',
+			'w': 'wchar_t',
+			'b': 'bool',
+			'c': 'char',
+			'a': 'signed char',
+			'h': 'unsigned char',
+			's': 'short',
+			't': 'unsigned short',
+			'i': 'int',
+			'j': 'unsigned int',
+			'l': 'long int',
+			'm': 'unsigned long int',
+			'x': 'long long int',
+			'y': 'unsigned long long int',
+			'n': '__int128',
+			'o': 'unsigned __int128',
+			'f': 'float',
+			'd': 'double',
+			'e': 'long double',
+			'g': '__float128',
+			'z': '...'
+		},
+		matches: function(char, qualifiers) {
+			return this.basicTypes[char] !== undefined;
+		},
+		parse: function(ctx) {
+			ctx.typeInfo.typeStr = this.basicTypes[ctx.char];
 			return ctx.remaining;
 		}
 	},
@@ -1030,27 +1038,10 @@ const TYPE_PARSERS = [
 		matches: (char) => char === 'S',
 		parse: (ctx) => {
 			const result = parseStdType(ctx.remaining, ctx.substitutions);
-			let typeStr = result.typeStr;
-			let remaining = result.str;
-			
 			// Check for template arguments after the std type
-			if (remaining[0] === 'I') {
-				const nextChar = remaining[1];
-				if (nextChar && /\d/.test(nextChar)) {
-					// Length-prefixed template arguments
-					const templateResult = parseTemplateIfPresent(remaining, typeStr);
-					typeStr = templateResult.name;
-					remaining = templateResult.str;
-				} else if (nextChar) {
-					// Type-code-based template arguments
-					const templateResult = parseTypeCodeTemplateArgs(remaining, typeStr, ctx.substitutions);
-					typeStr = templateResult.name;
-					remaining = templateResult.str;
-				}
-			}
-			
-			ctx.typeInfo.typeStr = typeStr;
-			return remaining;
+			const withTemplates = attachTemplateArgsIfPresent(result.str, result.typeStr, ctx.substitutions);
+			ctx.typeInfo.typeStr = withTemplates.typeName;
+			return withTemplates.remaining;
 		}
 	},
 	{
