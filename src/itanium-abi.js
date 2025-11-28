@@ -420,12 +420,12 @@ class TypeInfo {
 		this.templateType = null;
 	}
 
-	/**
-	 * Formats reference and pointer qualifiers
-	 * @returns {string} Formatted qualifiers
-	 */
 	formatReferenceAndPointers() {
 		return (this.isRef ? '&' : '') + (this.isRValueRef ? '&&' : '') + '*'.repeat(this.numPtr);
+	}
+
+	isQualified() {
+		return this.isConst || this.isVolatile || this.isRestrict || this.isRef || this.isRValueRef || this.numPtr > 0;
 	}
 
 	toString() {
@@ -629,6 +629,8 @@ function processTypeForSerialization(type, result, index, prevType, templateDept
 function serializeTypeList(types) {
 	const result = [];
 	let templateDepth = 0;
+
+	if (types.length === 1 && types[0].typeStr === 'void' && !types[0].isQualified()) return '';
 
 	for (let i = 0; i < types.length; i++) {
 		templateDepth = processTypeForSerialization(types[i], result, i, types[i - 1], templateDepth);

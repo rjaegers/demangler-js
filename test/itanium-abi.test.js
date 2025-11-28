@@ -10,7 +10,7 @@ describe('Free Functions', () => {
 	});
 
 	it('receives nothing, return void', (done) => {
-		assert.equal(itanium_abi.demangle("_Z7doThingv"), "doThing(void)");
+		assert.equal(itanium_abi.demangle("_Z7doThingv"), "doThing()");
 		done();
 	});
 
@@ -153,7 +153,7 @@ describe('Free Functions', () => {
 
 describe('classes', () => {
 	it('public function, receives nothing', (done) => {
-		assert.equal(itanium_abi.demangle("_ZN10test_class4testEv"), "test_class::test(void)");
+		assert.equal(itanium_abi.demangle("_ZN10test_class4testEv"), "test_class::test()");
 		done();
 	});
 
@@ -164,7 +164,7 @@ describe('classes', () => {
 
 	it('private function, receives nothing', (done) => {
 		assert.equal(itanium_abi.demangle("_ZN10test_class12test_privateEv"),
-			"test_class::test_private(void)");
+			"test_class::test_private()");
 		done();
 	});
 
@@ -368,7 +368,7 @@ describe('multiple parameters', () => {
 describe('nested namespaces', () => {
 	it('handles deeply nested namespaces', (done) => {
 		assert.equal(itanium_abi.demangle("_ZN5outer5inner4deep8functionEv"), 
-			"outer::inner::deep::function(void)");
+			"outer::inner::deep::function()");
 		done();
 	});
 
@@ -493,7 +493,7 @@ describe('operator overloading', () => {
 		});
 
 		it('handles operator~', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN6NumbercoEv"), "Number::operator~(void)");
+			assert.equal(itanium_abi.demangle("_ZN6NumbercoEv"), "Number::operator~()");
 			done();
 		});
 
@@ -535,7 +535,7 @@ describe('operator overloading', () => {
 
 	describe('logical and increment operators', () => {
 		it('handles operator!', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN6NumberntEv"), "Number::operator!(void)");
+			assert.equal(itanium_abi.demangle("_ZN6NumberntEv"), "Number::operator!()");
 			done();
 		});
 
@@ -550,12 +550,12 @@ describe('operator overloading', () => {
 		});
 
 		it('handles operator++', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN6NumberppEv"), "Number::operator++(void)");
+			assert.equal(itanium_abi.demangle("_ZN6NumberppEv"), "Number::operator++()");
 			done();
 		});
 
 		it('handles operator--', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN6NumbermmEv"), "Number::operator--(void)");
+			assert.equal(itanium_abi.demangle("_ZN6NumbermmEv"), "Number::operator--()");
 			done();
 		});
 	});
@@ -572,7 +572,7 @@ describe('operator overloading', () => {
 		});
 
 		it('handles operator->', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN7PointerptEv"), "Pointer::operator->(void)");
+			assert.equal(itanium_abi.demangle("_ZN7PointerptEv"), "Pointer::operator->()");
 			done();
 		});
 
@@ -611,22 +611,22 @@ describe('operator overloading', () => {
 
 	describe('unary operators', () => {
 		it('handles unary operator+', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN6NumberpsEv"), "Number::operator+(void)");
+			assert.equal(itanium_abi.demangle("_ZN6NumberpsEv"), "Number::operator+()");
 			done();
 		});
 
 		it('handles unary operator-', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN6NumberngEv"), "Number::operator-(void)");
+			assert.equal(itanium_abi.demangle("_ZN6NumberngEv"), "Number::operator-()");
 			done();
 		});
 
 		it('handles unary operator& (address-of)', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN6NumberadEv"), "Number::operator&(void)");
+			assert.equal(itanium_abi.demangle("_ZN6NumberadEv"), "Number::operator&()");
 			done();
 		});
 
 		it('handles unary operator* (dereference)', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN7PointerdeEv"), "Pointer::operator*(void)");
+			assert.equal(itanium_abi.demangle("_ZN7PointerdeEv"), "Pointer::operator*()");
 			done();
 		});
 	});
@@ -634,7 +634,7 @@ describe('operator overloading', () => {
 
 describe('constructors and destructors', () => {
 	it('handles constructor', (done) => {
-		assert.equal(itanium_abi.demangle("_ZN6VectorC1Ev"), "Vector::Vector(void)");
+		assert.equal(itanium_abi.demangle("_ZN6VectorC1Ev"), "Vector::Vector()");
 		done();
 	});
 
@@ -644,7 +644,7 @@ describe('constructors and destructors', () => {
 	});
 
 	it('handles destructor', (done) => {
-		assert.equal(itanium_abi.demangle("_ZN6VectorD1Ev"), "Vector::~Vector(void)");
+		assert.equal(itanium_abi.demangle("_ZN6VectorD1Ev"), "Vector::~Vector()");
 		done();
 	});
 
@@ -656,7 +656,7 @@ describe('constructors and destructors', () => {
 
 describe('const member functions', () => {
 	it('handles const member function', (done) => {
-		assert.equal(itanium_abi.demangle("_ZNK6Vector4sizeEv"), "Vector::size(void) const");
+		assert.equal(itanium_abi.demangle("_ZNK6Vector4sizeEv"), "Vector::size() const");
 		done();
 	});
 
@@ -738,7 +738,7 @@ describe('edge cases', () => {
 	});
 
 	it('demangles templated type in anonymous namespace', (done) => {
-		assert.equal(itanium_abi.demangle("_ZN12_GLOBAL__N_128gtest_suite_PrimeTableTest2_24ReturnsFalseForNonPrimesI18OnTheFlyPrimeTableE8TestBodyEv"), "(anonymous namespace)::gtest_suite_PrimeTableTest2_::ReturnsFalseForNonPrimes<OnTheFlyPrimeTable>::TestBody(void)");
+		assert.equal(itanium_abi.demangle("_ZN12_GLOBAL__N_128gtest_suite_PrimeTableTest2_24ReturnsFalseForNonPrimesI18OnTheFlyPrimeTableE8TestBodyEv"), "(anonymous namespace)::gtest_suite_PrimeTableTest2_::ReturnsFalseForNonPrimes<OnTheFlyPrimeTable>::TestBody()");
 		done();
 	});
 
@@ -748,13 +748,13 @@ describe('edge cases', () => {
 	});
 
 	it('handles empty parameter list explicitly', (done) => {
-		assert.equal(itanium_abi.demangle("_Z8functionv"), "function(void)");
+		assert.equal(itanium_abi.demangle("_Z8functionv"), "function()");
 		done();
 	});
 
 	it('handles very long names', (done) => {
 		assert.equal(itanium_abi.demangle("_Z49thisIsAVeryLongFunctionNameWithManyCharactersInItv"), 
-			"thisIsAVeryLongFunctionNameWithManyCharactersInIt(void)");
+			"thisIsAVeryLongFunctionNameWithManyCharactersInIt()");
 		done();
 	});
 });
