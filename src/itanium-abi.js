@@ -23,7 +23,7 @@ module.exports = {
 
 		const { types } = parseTypeList(remaining, substitutions, templateParams);
 		const parameterList = serializeTypeList(types);
-		
+
 		return `${functionName}(${parameterList})${isConst ? ' const' : ''}`;
 	}
 };
@@ -129,8 +129,8 @@ const SEGMENT_PARSERS = [
 		parse: (str, ctx) => ({ segment: '~' + ctx.className, remaining: str.slice(2) })
 	},
 	{
-		matches: (str) => /^[a-z][a-zA-Z]/.test(str) && getOperatorName(str.slice(0,2)),
-		parse: (str) => ({ segment: getOperatorName(str.slice(0,2)), remaining: str.slice(2) })
+		matches: (str) => /^[a-z][a-zA-Z]/.test(str) && getOperatorName(str.slice(0, 2)),
+		parse: (str) => ({ segment: getOperatorName(str.slice(0, 2)), remaining: str.slice(2) })
 	},
 	{
 		matches: (str) => /^(\d+)/.test(str),
@@ -162,7 +162,7 @@ function getCurrentClassName(segments) {
 }
 
 function parseConstQualifier(str) {
-	return str[0] === 'K' 
+	return str[0] === 'K'
 		? { isConst: true, remaining: str.slice(1) }
 		: { isConst: false, remaining: str };
 }
@@ -239,7 +239,7 @@ function parseAndAttachTemplates(str, baseName, substitutions = [], { lengthOnly
 	return { name: `${baseName}<${args.join(', ')}${close ? '>' : ''}`, str: remaining };
 }
 
-const parseTypeHelper = (str, substitutions = [], templateParams = []) => 
+const parseTypeHelper = (str, substitutions = [], templateParams = []) =>
 	parseSingleType(str, [], 0, [], substitutions, templateParams);
 
 function parseArrayType(str, substitutions = [], templateParams = []) {
@@ -251,7 +251,7 @@ function parseArrayType(str, substitutions = [], templateParams = []) {
 
 	const elementType = typeInfo.toString();
 	const arrayMatch = /^(.+?)(\[.+\])$/.exec(elementType);
-	const typeStr = arrayMatch 
+	const typeStr = arrayMatch
 		? `${arrayMatch[1]}[${sizeMatch[1]}]${arrayMatch[2]}`
 		: `${elementType}[${sizeMatch[1]}]`;
 
@@ -274,16 +274,16 @@ function parseFunctionSignature(str, substitutions = [], templateParams = []) {
 	return { returnType, params, remaining: remaining[0] === 'E' ? remaining.slice(1) : remaining };
 }
 
-const formatParameterList = (params) => 
+const formatParameterList = (params) =>
 	params.length === 0 || (params.length === 1 && params[0] === 'void') ? '' : params.join(', ');
 
 function parseFunctionType(str, substitutions = [], templateParams = []) {
 	const { returnType, params, remaining } = parseFunctionSignature(str, substitutions, templateParams);
 	if (!returnType) return { typeStr: '', str };
 
-	return { 
-		typeStr: `${returnType.toString()} (*)(${formatParameterList(params)})`, 
-		str: remaining 
+	return {
+		typeStr: `${returnType.toString()} (*)(${formatParameterList(params)})`,
+		str: remaining
 	};
 }
 
@@ -300,26 +300,26 @@ function parseMemberFunctionPointer(str, substitutions = [], templateParams = []
 	const { returnType, params, remaining: afterSignature } = parseFunctionSignature(remaining.slice(1), substitutions, templateParams);
 	if (!returnType) return { typeStr: '', str };
 
-	return { 
+	return {
 		typeStr: `${returnType.toString()} (${classType.toString()}::*)(${formatParameterList(params)})${isConst ? ' const' : ''}`,
-		str: afterSignature 
+		str: afterSignature
 	};
 }
 
 function parseTemplateParam(str, templateParams = []) {
 	if (str[0] === '_') {
-		return { 
-			typeStr: templateParams.length > 0 ? templateParams[0].toString() : '', 
-			str: str.slice(1) 
+		return {
+			typeStr: templateParams.length > 0 ? templateParams[0].toString() : '',
+			str: str.slice(1)
 		};
 	}
 
 	const match = /^(\d+)_/.exec(str);
 	if (match) {
 		const index = parseInt(match[1], 10);
-		return { 
-			typeStr: index < templateParams.length ? templateParams[index].toString() : '', 
-			str: str.slice(match[0].length) 
+		return {
+			typeStr: index < templateParams.length ? templateParams[index].toString() : '',
+			str: str.slice(match[0].length)
 		};
 	}
 
@@ -503,10 +503,10 @@ const TYPE_PARSERS = [
 			'g': '__float128',
 			'z': '...'
 		},
-		matches: function(char, qualifiers) {
+		matches: function (char, qualifiers) {
 			return this.basicTypes[char] !== undefined;
 		},
-		parse: function(ctx) {
+		parse: function (ctx) {
 			ctx.typeInfo.typeStr = this.basicTypes[ctx.char];
 			return ctx.remaining;
 		}
@@ -617,7 +617,7 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 	return new ParseResult(null, afterChar, templateDepth, templateStack);
 }
 
-const needsTypeSeparator = (index, type, prevType) => 
+const needsTypeSeparator = (index, type, prevType) =>
 	index > 0 && !type.templateEnd && !(prevType && prevType.templateStart);
 
 function processTypeForSerialization(type, result, index, prevType, templateDepth) {
