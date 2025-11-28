@@ -15,7 +15,7 @@ module.exports = {
 		const dotIndex = name.indexOf('.');
 		const encoding = dotIndex < 0 ? name.slice(2) : name.slice(2, dotIndex);
 
-		const { name: functionName, str: afterName, isConst = false } = popName(encoding);
+		const { name: functionName, str: afterName, isConst = false } = parseEncodedName(encoding);
 		const { templateParams, str: afterTemplate } = parseTemplatePlaceholders(afterName);
 
 		const substitutions = buildSubstitutions(functionName, templateParams);
@@ -118,23 +118,40 @@ function getOperatorName(code) {
 	return operatorMap[code] || null;
 }
 
+// Strategy-based parsing for individual name segments (namespaces, classes, ctors, dtors, operators)
+const SEGMENT_PARSERS = [
+	{
+		matches: (str) => /^C[123]/.test(str),
+		parse: (str, ctx) => ({ segment: ctx.className, remaining: str.slice(2) })
+	},
+	{
+		matches: (str) => /^D[012]/.test(str),
+		parse: (str, ctx) => ({ segment: '~' + ctx.className, remaining: str.slice(2) })
+	},
+	{
+		matches: (str) => /^[a-z][a-zA-Z]/.test(str) && getOperatorName(str.slice(0,2)),
+		parse: (str) => ({ segment: getOperatorName(str.slice(0,2)), remaining: str.slice(2) })
+	},
+	{
+		matches: (str) => /^(\d+)/.test(str),
+		parse: (str) => {
+			const { value, remaining } = parseLengthPrefixed(str);
+			const segment = value === '_GLOBAL__N_1' ? '(anonymous namespace)' : value;
+			return { segment, remaining };
+		}
+	}
+];
+
 function parseNameSegment(str, className = '') {
-	if (/^C[123]/.test(str)) {
-		return { segment: className, remaining: str.slice(2), isSpecial: true };
+	for (const parser of SEGMENT_PARSERS) {
+		if (parser.matches(str)) {
+			return { ...parser.parse(str, { className }), isSpecial: true };
+		}
 	}
-	
-	if (/^D[012]/.test(str)) {
-		return { segment: '~' + className, remaining: str.slice(2), isSpecial: true };
-	}
-	
-	if (/^[a-z][a-zA-Z]/.test(str)) {
-		const opName = getOperatorName(str.slice(0, 2));
-		if (opName) return { segment: opName, remaining: str.slice(2), isSpecial: false };
-	}
-	
-	const result = parseLengthPrefixed(str);
-	const segment = result.value === "_GLOBAL__N_1" ? "(anonymous namespace)" : result.value;
-	return { segment, remaining: result.remaining, isSpecial: false };
+	// Fallback length-prefixed parse (may hit if no parser matched)
+	const { value, remaining } = parseLengthPrefixed(str);
+	const segment = value === '_GLOBAL__N_1' ? '(anonymous namespace)' : value;
+	return { segment, remaining, isSpecial: false };
 }
 
 const isValidSegmentStart = (char) => /[\da-zCD]/.test(char);
@@ -180,27 +197,19 @@ function parseNamespaceSegments(remaining, initialSegments = []) {
 	return { segments, remaining };
 }
 
-function parseNestedNamespace(str) {
+function parseEncodedName(str) {
+	if (str[0] !== 'N') {
+		const { segment, remaining } = parseNameSegment(str);
+		if (!segment) return { name: '', str, isConst: false };
+		const { name, str: after } = parseAndAttachTemplates(remaining, segment, [], { lengthOnly: true });
+		return { name, str: after, isConst: false };
+	}
 	let remaining = str.slice(1);
-
 	const { isConst, remaining: afterConst } = parseConstQualifier(remaining);
 	const { segments: stdSegments, remaining: afterStd } = parseStdPrefix(str, afterConst);
 	const { segments, remaining: afterSegments } = parseNamespaceSegments(afterStd, stdSegments);
-	const consumeTerminator = (str) => str[0] === 'E' ? str.slice(1) : str;
-
-	return { 
-		name: segments.join("::"), 
-		str: consumeTerminator(afterSegments), 
-		isConst 
-	};
-}
-
-function popName(remainingString) {
-	if (remainingString[0] === 'N') return parseNestedNamespace(remainingString);
-	const { segment, remaining } = parseNameSegment(remainingString);
-	if (!segment) return { name: "", str: remainingString, isConst: false };
-	const { name, str } = parseAndAttachTemplates(remaining, segment, [], { lengthOnly: true });
-	return { name, str, isConst: false };
+	const finalRemaining = afterSegments[0] === 'E' ? afterSegments.slice(1) : afterSegments;
+	return { name: segments.join('::'), str: finalRemaining, isConst };
 }
 
 function parseAndAttachTemplates(str, baseName, substitutions = [], { lengthOnly = false } = {}) {
@@ -338,7 +347,7 @@ function parseStdType(str, substitutions = []) {
 	}
 
 	if (str[0] === 't') {
-		const { name, str: remaining } = popName(str.slice(1));
+		const { name, str: remaining } = parseEncodedName(str.slice(1));
 		return { typeStr: `std::${name}`, str: remaining };
 	}
 
@@ -347,7 +356,7 @@ function parseStdType(str, substitutions = []) {
 	}
 
 	if (!isNaN(parseInt(str[0], 10))) {
-		const { name, str: remaining } = popName(str);
+		const { name, str: remaining } = parseEncodedName(str);
 		return { typeStr: `std::${name}`, str: remaining };
 	}
 
@@ -560,7 +569,7 @@ const TYPE_PARSERS = [
 	{
 		matches: (char) => !isNaN(parseInt(char, 10)) || char === 'N',
 		parse: (ctx) => {
-			const { name, str } = popName(ctx.char + ctx.remaining);
+			const { name, str } = parseEncodedName(ctx.char + ctx.remaining);
 			ctx.typeInfo.typeStr = name;
 			ctx.substitutions.push(name);
 			return str;
