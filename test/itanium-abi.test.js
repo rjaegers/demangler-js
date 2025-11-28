@@ -54,18 +54,18 @@ describe('Free Functions', () => {
 		done();
 	});
 
-	it('receives long int', (done) => {
-		assert.equal(itanium_abi.demangle("_Z9test_longl"), "test_long(long int)");
+	it('receives long', (done) => {
+		assert.equal(itanium_abi.demangle("_Z9test_longl"), "test_long(long)");
 		done();
 	});
 
-	it('receives volatile pointer to long int', (done) => {
-		assert.equal(itanium_abi.demangle("_Z9dangerousPVl"), "dangerous(volatile long int*)");
+	it('receives volatile pointer to long', (done) => {
+		assert.equal(itanium_abi.demangle("_Z9dangerousPVl"), "dangerous(volatile long*)");
 		done();
 	});
 
-	it('receives long long int', (done) => {
-		assert.equal(itanium_abi.demangle("_Z9test_longx"), "test_long(long long int)");
+	it('receives long long', (done) => {
+		assert.equal(itanium_abi.demangle("_Z9test_longx"), "test_long(long long)");
 		done();
 	});
 
@@ -75,12 +75,12 @@ describe('Free Functions', () => {
 	});
 
 	it('receives size_t', (done) => {
-		assert.equal(itanium_abi.demangle("_Z10test_sizetm"), "test_sizet(unsigned long int)");
+		assert.equal(itanium_abi.demangle("_Z10test_sizetm"), "test_sizet(unsigned long)");
 		done();
 	});
 
 	it('receives signed size_t', (done) => {
-		assert.equal(itanium_abi.demangle("_Z11test_ssizetl"), "test_ssizet(long int)");
+		assert.equal(itanium_abi.demangle("_Z11test_ssizetl"), "test_ssizet(long)");
 		done();
 	});
 
@@ -101,7 +101,7 @@ describe('Free Functions', () => {
 
 	it('receives const restrict char ptrs', (done) => {
 		assert.equal(itanium_abi.demangle("_Z6strcpyPrKcPrc"),
-			"strcpy(const char* __restrict, char* __restrict)");
+			"strcpy(const char* restrict, char* restrict)");
 		done();
 	});
 
@@ -274,8 +274,8 @@ describe('numeric types', () => {
 		done();
 	});
 
-	it('receives unsigned long long int', (done) => {
-		assert.equal(itanium_abi.demangle("_Z8testULLIy"), "testULLI(unsigned long long int)");
+	it('receives unsigned long long', (done) => {
+		assert.equal(itanium_abi.demangle("_Z8testULLIy"), "testULLI(unsigned long long)");
 		done();
 	});
 });
@@ -589,12 +589,12 @@ describe('operator overloading', () => {
 
 	describe('memory operators', () => {
 		it('handles operator new', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN6ObjectnwEm"), "Object::operator new(unsigned long int)");
+			assert.equal(itanium_abi.demangle("_ZN6ObjectnwEm"), "Object::operator new(unsigned long)");
 			done();
 		});
 
 		it('handles operator new[]', (done) => {
-			assert.equal(itanium_abi.demangle("_ZN6ObjectnaEm"), "Object::operator new[](unsigned long int)");
+			assert.equal(itanium_abi.demangle("_ZN6ObjectnaEm"), "Object::operator new[](unsigned long)");
 			done();
 		});
 

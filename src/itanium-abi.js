@@ -437,7 +437,7 @@ class TypeInfo {
 		if (this.templateEnd) result += '>';
 		if (!this.templateStart) {
 			result += this.formatReferenceAndPointers();
-			if (this.isRestrict) result += ' __restrict';
+			if (this.isRestrict) result += ' restrict';
 		}
 		if (this.templateType) result += this.templateType.formatReferenceAndPointers();
 		return result;
@@ -491,10 +491,10 @@ const TYPE_PARSERS = [
 			't': 'unsigned short',
 			'i': 'int',
 			'j': 'unsigned int',
-			'l': 'long int',
-			'm': 'unsigned long int',
-			'x': 'long long int',
-			'y': 'unsigned long long int',
+			'l': 'long',
+			'm': 'unsigned long',
+			'x': 'long long',
+			'y': 'unsigned long long',
 			'n': '__int128',
 			'o': 'unsigned __int128',
 			'f': 'float',
