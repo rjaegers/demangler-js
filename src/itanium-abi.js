@@ -254,26 +254,6 @@ function parseTemplateIfPresent(str, currentName) {
 	return { name, str: remaining };
 }
 
-function parseTypeQualifiers(str) {
-	const qualifiers = { isConst: false, isVolatile: false, isRestrict: false, isRef: false, isRValueRef: false, numPtr: 0 };
-
-	const actions = {
-		R: () => qualifiers.isRef = true,
-		O: () => qualifiers.isRValueRef = true,
-		r: () => qualifiers.isRestrict = true,
-		V: () => qualifiers.isVolatile = true,
-		K: () => qualifiers.isConst = true,
-		P: () => qualifiers.numPtr++
-	};
-
-	while (actions[str[0]]) {
-		actions[str[0]]();
-		str = str.slice(1);
-	}
-
-	return { qualifiers, str };
-}
-
 const parseTypeHelper = (str, substitutions = [], templateParams = []) => 
 	parseSingleType(str, [], 0, [], substitutions, templateParams);
 
@@ -613,19 +593,28 @@ const TYPE_PARSERS = [
 ];
 
 function parseSingleType(encoding, types, templateDepth, templateStack, substitutions = [], templateParams = []) {
-	const { qualifiers, str } = parseTypeQualifiers(encoding);
-	const currentChar = str[0];
-	const remaining = str.slice(1);
+	let remaining = encoding;
+	const typeInfo = new TypeInfo();
+	const qualifierActions = {
+		R: () => typeInfo.isRef = true,
+		O: () => typeInfo.isRValueRef = true,
+		r: () => typeInfo.isRestrict = true,
+		V: () => typeInfo.isVolatile = true,
+		K: () => typeInfo.isConst = true,
+		P: () => typeInfo.numPtr++
+	};
+	while (qualifierActions[remaining[0]]) {
+		qualifierActions[remaining[0]]();
+		remaining = remaining.slice(1);
+	}
+	const currentChar = remaining[0];
+	const afterChar = remaining.slice(1);
 
 	for (const parser of TYPE_PARSERS) {
-		if (parser.matches(currentChar, qualifiers)) {
-			const typeInfo = new TypeInfo();
-			Object.assign(typeInfo, qualifiers);
-			
+		if (parser.matches(currentChar, typeInfo)) {
 			const ctx = {
 				char: currentChar,
-				remaining,
-				qualifiers,
+				remaining: afterChar,
 				typeInfo,
 				substitutions,
 				templateParams,
@@ -633,17 +622,14 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 				templateDepth,
 				templateStack
 			};
-			
 			if (parser.isTemplateMarker) return parser.parse(ctx);
-			
 			const result = parser.parse(ctx);
 			if (result !== null && typeInfo.typeStr) {
 				return new ParseResult(typeInfo, result, templateDepth, templateStack);
 			}
 		}
 	}
-
-	return new ParseResult(null, remaining, templateDepth, templateStack);
+	return new ParseResult(null, afterChar, templateDepth, templateStack);
 }
 
 const needsTypeSeparator = (index, type, prevType) => 
