@@ -159,9 +159,8 @@ function parseStdPrefix(originalStr, remaining) {
 function parseSegmentWithTemplate(remaining, className) {
 	const { segment, remaining: afterSegment } = parseNameSegment(remaining, className);
 	if (!segment) return { segment: null, remaining };
-
-	const { typeName, remaining: afterTemplate } = attachTemplateArgsIfPresent(afterSegment, segment, []);
-	return { segment: typeName, remaining: afterTemplate };
+	const { name, str } = parseAndAttachTemplates(afterSegment, segment, [], { lengthOnly: false });
+	return { segment: name, remaining: str };
 }
 
 function parseNamespaceSegments(remaining, initialSegments = []) {
@@ -198,60 +197,37 @@ function parseNestedNamespace(str) {
 
 function popName(remainingString) {
 	if (remainingString[0] === 'N') return parseNestedNamespace(remainingString);
-
 	const { segment, remaining } = parseNameSegment(remainingString);
 	if (!segment) return { name: "", str: remainingString, isConst: false };
-
-	const { name, str } = parseTemplateIfPresent(remaining, segment);
+	const { name, str } = parseAndAttachTemplates(remaining, segment, [], { lengthOnly: true });
 	return { name, str, isConst: false };
 }
 
-function attachTemplateArgsIfPresent(remaining, typeName, substitutions = []) {
-	if (remaining[0] !== 'I' || !remaining[1]) return { typeName, remaining };
-	
-	const parser = /\d/.test(remaining[1]) ? parseTemplateIfPresent : parseTypeCodeTemplateArgs;
-	const { name, str } = parser(remaining, typeName, substitutions);
-	return { typeName: name, remaining: str };
-}
-
-function parseTypeCodeTemplateArgs(str, currentName, substitutions = []) {
-	if (str[0] !== 'I') return { name: currentName, str };
-
+function parseAndAttachTemplates(str, baseName, substitutions = [], { lengthOnly = false } = {}) {
+	if (str[0] !== 'I') return { name: baseName, str };
+	if (lengthOnly && !(str[1] && /\d/.test(str[1]))) return { name: baseName, str };
+	const isLengthPrefixed = str[1] && /\d/.test(str[1]);
 	let remaining = str.slice(1);
-	const templateArgs = [];
-	const tempSubstitutions = [...substitutions];
-
-	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { typeInfo, remaining: newRemaining } = parseTypeHelper(remaining, tempSubstitutions, []);
-		if (!typeInfo) break;
-		templateArgs.push(typeInfo.toString());
-		remaining = newRemaining;
+	const args = [];
+	if (isLengthPrefixed) {
+		while (remaining.length > 0 && remaining[0] !== 'E') {
+			const { value, remaining: after } = parseLengthPrefixed(remaining);
+			if (!value) break;
+			args.push(value);
+			remaining = after;
+		}
+	} else {
+		const tempSubs = [...substitutions];
+		while (remaining.length > 0 && remaining[0] !== 'E') {
+			const { typeInfo, remaining: after } = parseTypeHelper(remaining, tempSubs, []);
+			if (!typeInfo) break;
+			args.push(typeInfo.toString());
+			remaining = after;
+		}
 	}
-
-	if (remaining[0] === 'E') remaining = remaining.slice(1);
-
-	return { name: `${currentName}<${templateArgs.join(", ")}>`, str: remaining };
-}
-
-function parseTemplateIfPresent(str, currentName) {
-	if (str[0] !== 'I' || !str[1] || !/\d/.test(str[1])) {
-		return { name: currentName, str };
-	}
-
-	let remaining = str.slice(1);
-	const templateArgs = [];
-
-	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { value, remaining: afterValue } = parseLengthPrefixed(remaining);
-		if (!value) break;
-		templateArgs.push(value);
-		remaining = afterValue;
-	}
-
-	let name = `${currentName}<${templateArgs.join(", ")}${remaining[0] === 'E' ? '>' : ''}`;
-	if (remaining[0] === 'E') remaining = remaining.slice(1);
-
-	return { name, str: remaining };
+	const close = remaining[0] === 'E';
+	if (close) remaining = remaining.slice(1);
+	return { name: `${baseName}<${args.join(', ')}${close ? '>' : ''}`, str: remaining };
 }
 
 const parseTypeHelper = (str, substitutions = [], templateParams = []) => 
@@ -576,9 +552,9 @@ const TYPE_PARSERS = [
 		parse: (ctx) => {
 			const result = parseStdType(ctx.remaining, ctx.substitutions);
 			// Check for template arguments after the std type
-			const withTemplates = attachTemplateArgsIfPresent(result.str, result.typeStr, ctx.substitutions);
-			ctx.typeInfo.typeStr = withTemplates.typeName;
-			return withTemplates.remaining;
+			const withTemplates = parseAndAttachTemplates(result.str, result.typeStr, ctx.substitutions, { lengthOnly: false });
+			ctx.typeInfo.typeStr = withTemplates.name;
+			return withTemplates.str;
 		}
 	},
 	{
