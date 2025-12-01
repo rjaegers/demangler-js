@@ -22,7 +22,7 @@ module.exports = {
 		let remaining = skipReturnTypeIfNeeded(afterTemplate, templateParams, substitutions);
 
 		const { types } = parseTypeList(remaining, substitutions, templateParams);
-		const parameterList = serializeTypeList(types);
+		const parameterList = TypeFormatter.serializeTypeList(types);
 
 		return `${functionName}(${parameterList})${isConst ? ' const' : ''}`;
 	}
@@ -35,14 +35,15 @@ function buildSubstitutions(functionName, templateParams) {
 		substitutions.push(functionName.substring(0, lastColonIndex));
 	}
 	for (const param of templateParams) {
-		substitutions.push(param.toString());
+		substitutions.push(param.format());
 	}
 	return substitutions;
 }
 
 function skipReturnTypeIfNeeded(remaining, templateParams, substitutions) {
 	if (templateParams.length > 0 && remaining.length > 0) {
-		return parseTypeHelper(remaining, substitutions, templateParams).remaining;
+		const result = parseTypeHelper(remaining, substitutions, templateParams);
+		return result.remaining;
 	}
 	return remaining;
 }
@@ -172,8 +173,12 @@ function parseStdPrefix(originalStr, remaining) {
 function parseSegmentWithTemplate(remaining, className) {
 	const { segment, remaining: afterSegment } = parseNameSegment(remaining, className);
 	if (!segment) return { segment: null, remaining };
-	const { name, str } = parseAndAttachTemplates(afterSegment, segment, [], { lengthOnly: false });
-	return { segment: name, remaining: str };
+	
+	const { args, str } = parseTemplateArgs(afterSegment, []);
+	if (!args) return { segment, remaining: afterSegment };
+	
+	const templateType = new TemplateType(segment, args);
+	return { segment: templateType.format(), remaining: str };
 }
 
 function parseNamespaceSegments(remaining, initialSegments = []) {
@@ -197,9 +202,16 @@ function parseEncodedName(str) {
 	if (str[0] !== 'N') {
 		const { segment, remaining } = parseNameSegment(str);
 		if (!segment) return { name: '', str, isConst: false };
-		const { name, str: after } = parseAndAttachTemplates(remaining, segment, [], { lengthOnly: true });
-		return { name, str: after, isConst: false };
+		
+		const { args, str: after } = parseTemplateArgs(remaining, []);
+		if (args && args.length > 0 && /\d/.test(remaining[1])) {
+			const templateType = new TemplateType(segment, args);
+			return { name: templateType.format(), str: after, isConst: false };
+		}
+		
+		return { name: segment, str: remaining, isConst: false };
 	}
+	
 	let remaining = str.slice(1);
 	const { isConst, remaining: afterConst } = parseConstQualifier(remaining);
 	const { segments: stdSegments, remaining: afterStd } = parseStdPrefix(str, afterConst);
@@ -208,118 +220,155 @@ function parseEncodedName(str) {
 	return { name: segments.join('::'), str: finalRemaining, isConst };
 }
 
-function parseAndAttachTemplates(str, baseName, substitutions = [], { lengthOnly = false } = {}) {
-	if (str[0] !== 'I') return { name: baseName, str };
-	if (lengthOnly && !(str[1] && /\d/.test(str[1]))) return { name: baseName, str };
+function parseTemplateArgs(str, substitutions = []) {
+	if (str[0] !== 'I') return { args: null, str };
+	
 	const isLengthPrefixed = str[1] && /\d/.test(str[1]);
 	let remaining = str.slice(1);
 	const args = [];
+	
 	if (isLengthPrefixed) {
 		while (remaining.length > 0 && remaining[0] !== 'E') {
 			const { value, remaining: after } = parseLengthPrefixed(remaining);
 			if (!value) break;
-			args.push(value);
+			args.push(new NamedType(value));
 			remaining = after;
 		}
 	} else {
 		const tempSubs = [...substitutions];
 		while (remaining.length > 0 && remaining[0] !== 'E') {
-			const { typeInfo, remaining: after } = parseTypeHelper(remaining, tempSubs, []);
-			if (!typeInfo) break;
-			args.push(typeInfo.toString());
+			const { typeNode, remaining: after } = parseTypeHelper(remaining, tempSubs, []);
+			if (!typeNode) break;
+			args.push(typeNode);
 			remaining = after;
 		}
 	}
-	const close = remaining[0] === 'E';
-	if (close) remaining = remaining.slice(1);
-	return { name: `${baseName}<${args.join(', ')}${close ? '>' : ''}`, str: remaining };
+	
+	if (remaining[0] === 'E') remaining = remaining.slice(1);
+	return { args, str: remaining };
 }
 
-const parseTypeHelper = (str, substitutions = [], templateParams = []) =>
-	parseSingleType(str, [], 0, [], substitutions, templateParams);
+/**
+ * Helper function to parse a single type
+ * Wraps parseSingleType with default parameters
+ * Returns {typeNode, remaining} for use in other parsers
+ */
+const parseTypeHelper = (str, substitutions = [], templateParams = []) => {
+	const result = parseSingleType(str, [], 0, [], substitutions, templateParams);
+	return {
+		typeNode: result.typeNode,
+		parseNode: result.parseNode,
+		remaining: result.remaining
+	};
+}
 
 function parseArrayType(str, substitutions = [], templateParams = []) {
 	const sizeMatch = /^(\d+)_/.exec(str);
-	if (!sizeMatch) return { typeStr: '', str };
+	if (!sizeMatch) return { typeNode: null, str };
 
-	const { typeInfo, remaining } = parseTypeHelper(str.slice(sizeMatch[0].length), substitutions, templateParams);
-	if (!typeInfo) return { typeStr: '', str };
+	const { typeNode: innerType, remaining } = parseTypeHelper(str.slice(sizeMatch[0].length), substitutions, templateParams);
+	if (!innerType) return { typeNode: null, str };
 
-	const elementType = typeInfo.toString();
-	const arrayMatch = /^(.+?)(\[.+\])$/.exec(elementType);
-	const typeStr = arrayMatch
-		? `${arrayMatch[1]}[${sizeMatch[1]}]${arrayMatch[2]}`
-		: `${elementType}[${sizeMatch[1]}]`;
+	// Extract dimensions from nested arrays
+	const dimensions = [sizeMatch[1]];
+	let elementType = innerType;
 
-	return { typeStr, str: remaining };
+	// If the inner type is already an ArrayType, flatten the dimensions
+	if (innerType instanceof ArrayType) {
+		dimensions.push(...innerType.dimensions);
+		elementType = innerType.elementType;
+	}
+
+	const typeNode = new ArrayType(elementType, dimensions);
+	return { typeNode, str: remaining };
 }
 
 function parseFunctionSignature(str, substitutions = [], templateParams = []) {
-	const { typeInfo: returnType, remaining: afterReturn } = parseTypeHelper(str, substitutions, templateParams);
+	const { typeNode: returnType, remaining: afterReturn } = parseTypeHelper(str, substitutions, templateParams);
 	if (!returnType) return { returnType: null, params: [], remaining: str };
 
 	const params = [];
 	let remaining = afterReturn;
 
 	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { typeInfo, remaining: afterParam } = parseTypeHelper(remaining, substitutions, templateParams);
-		if (typeInfo) params.push(typeInfo.toString());
+		const { typeNode, remaining: afterParam } = parseTypeHelper(remaining, substitutions, templateParams);
+		if (typeNode) params.push(typeNode);
 		remaining = afterParam;
 	}
 
 	return { returnType, params, remaining: remaining[0] === 'E' ? remaining.slice(1) : remaining };
 }
 
-const formatParameterList = (params) =>
-	params.length === 0 || (params.length === 1 && params[0] === 'void') ? '' : params.join(', ');
+/**
+ * Utility class for formatting type information
+ * Follows Single Responsibility Principle - only handles formatting
+ */
+class TypeFormatter {
+	/**
+	 * Formats a parameter list, handling the special case of void
+	 */
+	static formatParameterList(params) {
+		if (params.length === 0) return '';
+		if (params.length === 1 && params[0] === 'void') return '';
+		return params.join(', ');
+	}
+
+	/**
+	 * Formats a type node to a string
+	 */
+	static formatType(type) {
+		if (!type) return '';
+		if (typeof type === 'string') return type;
+		return type.format();
+	}
+
+	/**
+	 * Formats an array of types
+	 */
+	static formatTypeList(types) {
+		return types.map(t => this.formatType(t));
+	}
+}
 
 function parseFunctionType(str, substitutions = [], templateParams = []) {
 	const { returnType, params, remaining } = parseFunctionSignature(str, substitutions, templateParams);
-	if (!returnType) return { typeStr: '', str };
+	if (!returnType) return { typeNode: null, str };
 
-	return {
-		typeStr: `${returnType.toString()} (*)(${formatParameterList(params)})`,
-		str: remaining
-	};
+	const typeNode = new FunctionPointerType(returnType, params);
+	return { typeNode, str: remaining };
 }
 
 function parseMemberFunctionPointer(str, substitutions = [], templateParams = []) {
-	const { typeInfo: classType, remaining: afterClass } = parseTypeHelper(str, substitutions, templateParams);
-	if (!classType) return { typeStr: '', str };
+	const { typeNode: classType, remaining: afterClass } = parseTypeHelper(str, substitutions, templateParams);
+	if (!classType) return { typeNode: null, str };
 
 	let remaining = afterClass;
 	const isConst = remaining[0] === 'K';
 	if (isConst) remaining = remaining.slice(1);
 
-	if (remaining[0] !== 'F') return { typeStr: '', str };
+	if (remaining[0] !== 'F') return { typeNode: null, str };
 
 	const { returnType, params, remaining: afterSignature } = parseFunctionSignature(remaining.slice(1), substitutions, templateParams);
-	if (!returnType) return { typeStr: '', str };
+	if (!returnType) return { typeNode: null, str };
 
-	return {
-		typeStr: `${returnType.toString()} (${classType.toString()}::*)(${formatParameterList(params)})${isConst ? ' const' : ''}`,
-		str: afterSignature
-	};
+	const typeNode = new MemberFunctionPointerType(classType, returnType, params, isConst);
+	return { typeNode, str: afterSignature };
 }
 
 function parseTemplateParam(str, templateParams = []) {
 	if (str[0] === '_') {
-		return {
-			typeStr: templateParams.length > 0 ? templateParams[0].toString() : '',
-			str: str.slice(1)
-		};
+		const typeNode = templateParams.length > 0 ? templateParams[0] : null;
+		return { typeNode, str: str.slice(1) };
 	}
 
 	const match = /^(\d+)_/.exec(str);
 	if (match) {
 		const index = parseInt(match[1], 10);
-		return {
-			typeStr: index < templateParams.length ? templateParams[index].toString() : '',
-			str: str.slice(match[0].length)
-		};
+		const typeNode = index < templateParams.length ? templateParams[index] : null;
+		return { typeNode, str: str.slice(match[0].length) };
 	}
 
-	return { typeStr: '', str };
+	return { typeNode: null, str };
 }
 
 function parseStdType(str, substitutions = []) {
@@ -333,30 +382,37 @@ function parseStdType(str, substitutions = []) {
 	};
 
 	if (str[0] === '_') {
-		return { typeStr: substitutions[0] || '', str: str.slice(1) };
+		const typeStr = substitutions[0] || '';
+		const typeNode = typeStr ? new NamedType(typeStr) : null;
+		return { typeNode, str: str.slice(1) };
 	}
 
 	const subMatch = /^(\d+)_/.exec(str);
 	if (subMatch) {
 		const index = parseInt(subMatch[1], 10);
-		return { typeStr: substitutions[index] || '', str: str.slice(subMatch[0].length) };
+		const typeStr = substitutions[index] || '';
+		const typeNode = typeStr ? new NamedType(typeStr) : null;
+		return { typeNode, str: str.slice(subMatch[0].length) };
 	}
 
 	if (str[0] === 't') {
 		const { name, str: remaining } = parseEncodedName(str.slice(1));
-		return { typeStr: `std::${name}`, str: remaining };
+		const typeNode = new NamedType(`std::${name}`);
+		return { typeNode, str: remaining };
 	}
 
 	if (stdTypeMap[str[0]]) {
-		return { typeStr: stdTypeMap[str[0]], str: str.slice(1) };
+		const typeNode = new NamedType(stdTypeMap[str[0]]);
+		return { typeNode, str: str.slice(1) };
 	}
 
 	if (!isNaN(parseInt(str[0], 10))) {
 		const { name, str: remaining } = parseEncodedName(str);
-		return { typeStr: `std::${name}`, str: remaining };
+		const typeNode = new NamedType(`std::${name}`);
+		return { typeNode, str: remaining };
 	}
 
-	return { typeStr: '', str };
+	return { typeNode: null, str };
 }
 
 function parseTemplatePlaceholders(str) {
@@ -366,8 +422,8 @@ function parseTemplatePlaceholders(str) {
 	let remaining = str.slice(1);
 
 	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { typeInfo, remaining: newRemaining } = parseTypeHelper(remaining, [], []);
-		if (typeInfo) templateParams.push(typeInfo);
+		const { typeNode, remaining: newRemaining } = parseTypeHelper(remaining, [], []);
+		if (typeNode) templateParams.push(typeNode);
 		remaining = newRemaining;
 	}
 
@@ -383,10 +439,10 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 	while (remaining.length > 0) {
 		const result = parseSingleType(remaining, types, templateDepth, templateStack, substitutions, templateParams);
 
-		if (result.typeInfo) {
-			types.push(result.typeInfo);
-			if (!result.typeInfo.templateStart && !result.typeInfo.templateEnd) {
-				substitutions.push(result.typeInfo.toString());
+		if (result.parseNode) {
+			types.push(result.parseNode);
+			if (!result.parseNode.templateStart && !result.parseNode.templateEnd && result.parseNode.typeNode) {
+				substitutions.push(result.parseNode.toString());
 			}
 		}
 
@@ -398,51 +454,157 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 	return { types };
 }
 
-/**
- * Represents type information with formatting capabilities
- */
-class TypeInfo {
-	constructor() {
-		this.isBase = true;
-		this.typeStr = "";
-		this.isConst = false;
-		this.isVolatile = false;
-		this.isRestrict = false;
-		this.isRef = false;
-		this.isRValueRef = false;
-		this.numPtr = 0;
-		this.templateStart = false;
-		this.templateEnd = false;
-		this.templateType = null;
+class TypeNode {
+	format() {
+		throw new Error('format() must be implemented by subclass');
+	}
+}
+
+class BasicType extends TypeNode {
+	constructor(name) {
+		super();
+		this.name = name;
 	}
 
-	formatReferenceAndPointers() {
-		return (this.isRef ? '&' : '') + (this.isRValueRef ? '&&' : '') + '*'.repeat(this.numPtr);
+	format() {
+		return this.name;
+	}
+}
+
+class NamedType extends TypeNode {
+	constructor(name) {
+		super();
+		this.name = name;
 	}
 
-	isQualified() {
-		return this.isConst || this.isVolatile || this.isRestrict || this.isRef || this.isRValueRef || this.numPtr > 0;
+	format() {
+		return this.name;
+	}
+}
+
+class QualifiedType extends TypeNode {
+	constructor(baseType, qualifiers = {}) {
+		super();
+		this.baseType = baseType;
+		this.isConst = qualifiers.isConst || false;
+		this.isVolatile = qualifiers.isVolatile || false;
+		this.isRestrict = qualifiers.isRestrict || false;
 	}
 
-	toString() {
+	format() {
 		let result = '';
 		if (this.isConst) result += 'const ';
 		if (this.isVolatile) result += 'volatile ';
-		result += this.typeStr;
-		if (this.templateStart) result += '<';
-		if (this.templateEnd) result += '>';
-		if (!this.templateStart) {
-			result += this.formatReferenceAndPointers();
-			if (this.isRestrict) result += ' restrict';
-		}
-		if (this.templateType) result += this.templateType.formatReferenceAndPointers();
+		result += this.baseType.format();
+		if (this.isRestrict) result += ' restrict';
 		return result;
 	}
 }
 
+class PointerType extends TypeNode {
+	constructor(pointeeType, count = 1) {
+		super();
+		this.pointeeType = pointeeType;
+		this.count = count;
+	}
+
+	format() {
+		return this.pointeeType.format() + '*'.repeat(this.count);
+	}
+}
+
+class ReferenceType extends TypeNode {
+	constructor(referencedType, isRValue = false) {
+		super();
+		this.referencedType = referencedType;
+		this.isRValue = isRValue;
+	}
+
+	format() {
+		return this.referencedType.format() + (this.isRValue ? '&&' : '&');
+	}
+}
+
+class ArrayType extends TypeNode {
+	constructor(elementType, dimensions = []) {
+		super();
+		this.elementType = elementType;
+		this.dimensions = dimensions; // Array of sizes
+	}
+
+	format() {
+		const baseFormat = this.elementType.format();
+		const dimensionsStr = this.dimensions.map(dim => `[${dim}]`).join('');
+		return baseFormat + dimensionsStr;
+	}
+}
+
+class FunctionPointerType extends TypeNode {
+	constructor(returnType, paramTypes = []) {
+		super();
+		this.returnType = returnType;
+		this.paramTypes = paramTypes;
+	}
+
+	format() {
+		const formattedParams = this.paramTypes.map(p => p.format());
+		const params = this._formatParamList(formattedParams);
+		const returnTypeStr = this.returnType.format();
+		return `${returnTypeStr} (*)(${params})`;
+	}
+
+	_formatParamList(params) {
+		if (params.length === 0) return '';
+		if (params.length === 1 && params[0] === 'void') return '';
+		return params.join(', ');
+	}
+}
+
+class MemberFunctionPointerType extends TypeNode {
+	constructor(classType, returnType, paramTypes = [], isConst = false) {
+		super();
+		this.classType = classType;
+		this.returnType = returnType;
+		this.paramTypes = paramTypes;
+		this.isConst = isConst;
+	}
+
+	format() {
+		const formattedParams = this.paramTypes.map(p => p.format());
+		const params = this._formatParamList(formattedParams);
+		const returnTypeStr = this.returnType.format();
+		const classTypeStr = this.classType.format();
+		const constQualifier = this.isConst ? ' const' : '';
+		return `${returnTypeStr} (${classTypeStr}::*)(${params})${constQualifier}`;
+	}
+
+	_formatParamList(params) {
+		if (params.length === 0) return '';
+		if (params.length === 1 && params[0] === 'void') return '';
+		return params.join(', ');
+	}
+}
+
+class TemplateType extends TypeNode {
+	constructor(baseName, templateArgs = []) {
+		super();
+		this.baseName = baseName;
+		this.templateArgs = templateArgs; // Array of TypeNode instances
+	}
+
+	format() {
+		if (this.templateArgs.length === 0) {
+			return this.baseName;
+		}
+		const args = this.templateArgs.map(arg => arg.format()).join(', ');
+		return `${this.baseName}<${args}>`;
+	}
+}
+
 class ParseResult {
-	constructor(typeInfo, remaining, templateDepth, templateStack) {
-		this.typeInfo = typeInfo;
+	constructor(parseNode, remaining, templateDepth, templateStack) {
+		this.parseNode = parseNode;
+		this.typeNode = parseNode ? parseNode.typeNode : null;
 		this.remaining = remaining;
 		this.templateDepth = templateDepth;
 		this.templateStack = templateStack;
@@ -468,10 +630,11 @@ const TYPE_PARSERS = [
 			if (ctx.templateDepth <= 0) {
 				return new ParseResult(null, ctx.remaining, ctx.templateDepth, ctx.templateStack);
 			}
-			ctx.typeInfo.templateEnd = true;
+			const wrapper = new TypeParseNode(null);
+			wrapper.templateEnd = true;
 			const newDepth = ctx.templateDepth - 1;
-			ctx.typeInfo.templateType = ctx.templateStack[newDepth];
-			return new ParseResult(ctx.typeInfo, ctx.remaining, newDepth, ctx.templateStack.slice(0, -1));
+			wrapper.templateType = ctx.templateStack[newDepth];
+			return new ParseResult(wrapper, ctx.remaining, newDepth, ctx.templateStack.slice(0, -1));
 		},
 		isTemplateMarker: true
 	},
@@ -503,7 +666,8 @@ const TYPE_PARSERS = [
 			return this.basicTypes[char] !== undefined;
 		},
 		parse: function (ctx) {
-			ctx.typeInfo.typeStr = this.basicTypes[ctx.char];
+			const typeName = this.basicTypes[ctx.char];
+			ctx.typeNode = new BasicType(typeName);
 			return ctx.remaining;
 		}
 	},
@@ -511,8 +675,8 @@ const TYPE_PARSERS = [
 		matches: (char) => char === 'A',
 		parse: (ctx) => {
 			const result = parseArrayType(ctx.remaining, ctx.substitutions, ctx.templateParams);
-			if (result.typeStr) {
-				ctx.typeInfo.typeStr = result.typeStr;
+			if (result.typeNode) {
+				ctx.typeNode = result.typeNode;
 				return result.str;
 			}
 			return null;
@@ -522,9 +686,9 @@ const TYPE_PARSERS = [
 		matches: (char, qualifiers) => char === 'F' && qualifiers.numPtr > 0,
 		parse: (ctx) => {
 			const result = parseFunctionType(ctx.remaining, ctx.substitutions, ctx.templateParams);
-			if (result.typeStr) {
-				ctx.typeInfo.typeStr = result.typeStr;
-				ctx.typeInfo.numPtr = 0;  // Function pointer notation already includes the pointer
+			if (result.typeNode) {
+				ctx.typeNode = result.typeNode;
+				ctx.qualifiers.numPtr = 0;  // Function pointer notation already includes the pointer
 				return result.str;
 			}
 			return null;
@@ -534,8 +698,8 @@ const TYPE_PARSERS = [
 		matches: (char) => char === 'M',
 		parse: (ctx) => {
 			const result = parseMemberFunctionPointer(ctx.remaining, ctx.substitutions, ctx.templateParams);
-			if (result.typeStr) {
-				ctx.typeInfo.typeStr = result.typeStr;
+			if (result.typeNode) {
+				ctx.typeNode = result.typeNode;
 				return result.str;
 			}
 			return null;
@@ -545,8 +709,8 @@ const TYPE_PARSERS = [
 		matches: (char) => char === 'T',
 		parse: (ctx) => {
 			const result = parseTemplateParam(ctx.remaining, ctx.templateParams);
-			if (result.typeStr) {
-				ctx.typeInfo.typeStr = result.typeStr;
+			if (result.typeNode) {
+				ctx.typeNode = result.typeNode;
 				return result.str;
 			}
 			return null;
@@ -556,47 +720,147 @@ const TYPE_PARSERS = [
 		matches: (char) => char === 'S',
 		parse: (ctx) => {
 			const result = parseStdType(ctx.remaining, ctx.substitutions);
-			// Check for template arguments after the std type
-			const withTemplates = parseAndAttachTemplates(result.str, result.typeStr, ctx.substitutions, { lengthOnly: false });
-			ctx.typeInfo.typeStr = withTemplates.name;
-			return withTemplates.str;
+			if (!result.typeNode) return null;
+			
+			const { args, str } = parseTemplateArgs(result.str, ctx.substitutions);
+			if (args && args.length > 0) {
+				const baseName = result.typeNode.format();
+				ctx.typeNode = new TemplateType(baseName, args);
+			} else {
+				ctx.typeNode = result.typeNode;
+			}
+			
+			return str;
 		}
 	},
 	{
 		matches: (char) => !isNaN(parseInt(char, 10)) || char === 'N',
 		parse: (ctx) => {
 			const { name, str } = parseEncodedName(ctx.char + ctx.remaining);
-			ctx.typeInfo.typeStr = name;
+			ctx.typeNode = new NamedType(name);
 			ctx.substitutions.push(name);
 			return str;
 		}
 	}
 ];
 
-function parseSingleType(encoding, types, templateDepth, templateStack, substitutions = [], templateParams = []) {
-	let remaining = encoding;
-	const typeInfo = new TypeInfo();
-	const qualifierActions = {
-		R: () => typeInfo.isRef = true,
-		O: () => typeInfo.isRValueRef = true,
-		r: () => typeInfo.isRestrict = true,
-		V: () => typeInfo.isVolatile = true,
-		K: () => typeInfo.isConst = true,
-		P: () => typeInfo.numPtr++
+/**
+ * Parses type qualifiers (const, volatile, restrict, pointers, references)
+ * Returns the parsed qualifiers and remaining string
+ * This is pure parsing - no formatting logic
+ */
+function parseQualifiers(str) {
+	const qualifiers = {
+		isRef: false,
+		isRValueRef: false,
+		isRestrict: false,
+		isVolatile: false,
+		isConst: false,
+		numPtr: 0
 	};
+
+	let remaining = str;
+	const qualifierActions = {
+		R: () => qualifiers.isRef = true,
+		O: () => qualifiers.isRValueRef = true,
+		r: () => qualifiers.isRestrict = true,
+		V: () => qualifiers.isVolatile = true,
+		K: () => qualifiers.isConst = true,
+		P: () => qualifiers.numPtr++
+	};
+
 	while (qualifierActions[remaining[0]]) {
 		qualifierActions[remaining[0]]();
 		remaining = remaining.slice(1);
 	}
+
+	return { qualifiers, remaining };
+}
+
+/**
+ * Wraps a type node with qualifiers (const, volatile, pointers, references)
+ */
+function applyQualifiers(baseType, qualifiers) {
+	let result = baseType;
+
+	// Apply const/volatile wrapping (but not restrict yet - it goes after pointers)
+	if (qualifiers.isConst || qualifiers.isVolatile) {
+		result = new QualifiedType(result, {
+			isConst: qualifiers.isConst,
+			isVolatile: qualifiers.isVolatile,
+			isRestrict: false
+		});
+	}
+
+	// Apply pointer wrapping
+	if (qualifiers.numPtr > 0) {
+		result = new PointerType(result, qualifiers.numPtr);
+	}
+
+	// Apply restrict after pointers
+	if (qualifiers.isRestrict) {
+		result = new QualifiedType(result, {
+			isConst: false,
+			isVolatile: false,
+			isRestrict: true
+		});
+	}
+
+	// Apply reference wrapping
+	if (qualifiers.isRef) {
+		result = new ReferenceType(result, false);
+	} else if (qualifiers.isRValueRef) {
+		result = new ReferenceType(result, true);
+	}
+
+	return result;
+}
+
+/**
+ * Wrapper class to track template markers during parsing
+ * Used to maintain template start/end markers for proper serialization
+ */
+class TypeParseNode {
+	constructor(typeNode) {
+		this.typeNode = typeNode;
+		this.templateStart = false;
+		this.templateEnd = false;
+		this.templateType = null;
+	}
+
+	format() {
+		return this.typeNode ? this.typeNode.format() : '';
+	}
+
+	toString() {
+		let result = this.format();
+		if (this.templateStart) result += '<';
+		if (this.templateEnd) result += '>';
+		return result;
+	}
+
+	isQualified() {
+		return this.typeNode instanceof QualifiedType ||
+			this.typeNode instanceof PointerType ||
+			this.typeNode instanceof ReferenceType;
+	}
+}
+
+function parseSingleType(encoding, types, templateDepth, templateStack, substitutions = [], templateParams = []) {
+	const { qualifiers, remaining } = parseQualifiers(encoding);
+
 	const currentChar = remaining[0];
-	const afterChar = remaining.slice(1);
+	const nextChar = remaining.slice(1);
+
+	let typeNode = null;
 
 	for (const parser of TYPE_PARSERS) {
-		if (parser.matches(currentChar, typeInfo)) {
+		if (parser.matches(currentChar, qualifiers)) {
 			const ctx = {
 				char: currentChar,
-				remaining: afterChar,
-				typeInfo,
+				remaining: nextChar,
+				typeNode: null,
+				qualifiers,
 				substitutions,
 				templateParams,
 				types,
@@ -605,31 +869,38 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 			};
 			if (parser.isTemplateMarker) return parser.parse(ctx);
 			const result = parser.parse(ctx);
-			if (result !== null && typeInfo.typeStr) {
-				return new ParseResult(typeInfo, result, templateDepth, templateStack);
+			if (result !== null && ctx.typeNode) {
+				typeNode = applyQualifiers(ctx.typeNode, qualifiers);
+				const wrapper = new TypeParseNode(typeNode);
+				return new ParseResult(wrapper, result, templateDepth, templateStack);
 			}
 		}
 	}
-	return new ParseResult(null, afterChar, templateDepth, templateStack);
+
+	return new ParseResult(null, nextChar, templateDepth, templateStack);
 }
 
-const needsTypeSeparator = (index, type, prevType) =>
-	index > 0 && !type.templateEnd && !(prevType && prevType.templateStart);
+TypeFormatter.needsTypeSeparator = function (index, type, prevType) {
+	return index > 0 && !type.templateEnd && !(prevType && prevType.templateStart);
+}
 
-function processTypeForSerialization(type, result, index, prevType, templateDepth) {
-	if (needsTypeSeparator(index, type, prevType)) result.push(', ');
+TypeFormatter.processTypeForSerialization = function (type, result, index, prevType, templateDepth) {
+	if (this.needsTypeSeparator(index, type, prevType)) result.push(', ');
 	result.push(type.toString());
 	return templateDepth + (type.templateStart ? 1 : 0) + (type.templateEnd ? -1 : 0);
 }
 
-function serializeTypeList(types) {
+TypeFormatter.serializeTypeList = function (types) {
 	const result = [];
 	let templateDepth = 0;
 
-	if (types.length === 1 && types[0].typeStr === 'void' && !types[0].isQualified()) return '';
+	// Special case: single void parameter with no qualifiers should be empty
+	if (types.length === 1 && types[0].typeNode instanceof BasicType && types[0].typeNode.name === 'void' && !types[0].isQualified()) {
+		return '';
+	}
 
 	for (let i = 0; i < types.length; i++) {
-		templateDepth = processTypeForSerialization(types[i], result, i, types[i - 1], templateDepth);
+		templateDepth = this.processTypeForSerialization(types[i], result, i, types[i - 1], templateDepth);
 	}
 
 	return result.join('');
