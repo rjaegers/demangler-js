@@ -291,8 +291,6 @@ function parseFunctionSignature(str, substitutions = [], templateParams = []) {
 class TypeVisitor {
 	visitNamedType(node) { throw new Error('visitNamedType not implemented'); }
 	visitQualifiedType(node) { throw new Error('visitQualifiedType not implemented'); }
-	visitPointerType(node) { throw new Error('visitPointerType not implemented'); }
-	visitReferenceType(node) { throw new Error('visitReferenceType not implemented'); }
 	visitArrayType(node) { throw new Error('visitArrayType not implemented'); }
 	visitFunctionPointerType(node) { throw new Error('visitFunctionPointerType not implemented'); }
 	visitMemberFunctionPointerType(node) { throw new Error('visitMemberFunctionPointerType not implemented'); }
@@ -306,19 +304,19 @@ class FormatVisitor extends TypeVisitor {
 
 	visitQualifiedType(node) {
 		let result = '';
+
 		if (node.isConst) result += 'const ';
 		if (node.isVolatile) result += 'volatile ';
+
 		result += node.baseType.accept(this);
+
+        result += '*'.repeat(node.numPtr);
+
 		if (node.isRestrict) result += ' restrict';
+		if (node.isRef) result += '&';
+		if (node.isRValueRef) result += '&&';
+
 		return result;
-	}
-
-	visitPointerType(node) {
-		return node.pointeeType.accept(this) + '*'.repeat(node.count);
-	}
-
-	visitReferenceType(node) {
-		return node.referencedType.accept(this) + (node.isRValue ? '&&' : '&');
 	}
 
 	visitArrayType(node) {
@@ -508,34 +506,13 @@ class QualifiedType extends TypeNode {
 		this.isConst = qualifiers.isConst || false;
 		this.isVolatile = qualifiers.isVolatile || false;
 		this.isRestrict = qualifiers.isRestrict || false;
+		this.numPtr = qualifiers.numPtr || 0;
+		this.isRef = qualifiers.isRef || false;
+		this.isRValueRef = qualifiers.isRValueRef || false;
 	}
 
 	accept(visitor) {
 		return visitor.visitQualifiedType(this);
-	}
-}
-
-class PointerType extends TypeNode {
-	constructor(pointeeType, count = 1) {
-		super();
-		this.pointeeType = pointeeType;
-		this.count = count;
-	}
-
-	accept(visitor) {
-		return visitor.visitPointerType(this);
-	}
-}
-
-class ReferenceType extends TypeNode {
-	constructor(referencedType, isRValue = false) {
-		super();
-		this.referencedType = referencedType;
-		this.isRValue = isRValue;
-	}
-
-	accept(visitor) {
-		return visitor.visitReferenceType(this);
 	}
 }
 
@@ -586,13 +563,6 @@ class TemplateType extends TypeNode {
 
 	accept(visitor) {
 		return visitor.visitTemplateType(this);
-	}
-}
-
-class ParseResult {
-	constructor(typeNode, remaining) {
-		this.typeNode = typeNode;
-		this.remaining = remaining;
 	}
 }
 
@@ -732,43 +702,13 @@ function parseQualifiers(str) {
 	return { qualifiers, remaining };
 }
 
-/**
- * Wraps a type node with qualifiers (const, volatile, pointers, references)
- */
 function applyQualifiers(baseType, qualifiers) {
-	let result = baseType;
-
-	// Apply const/volatile wrapping (but not restrict yet - it goes after pointers)
-	if (qualifiers.isConst || qualifiers.isVolatile) {
-		result = new QualifiedType(result, {
-			isConst: qualifiers.isConst,
-			isVolatile: qualifiers.isVolatile,
-			isRestrict: false
-		});
+	// Check if there are any qualifiers to apply
+	if (qualifiers.isConst || qualifiers.isVolatile || qualifiers.isRestrict ||
+		qualifiers.numPtr > 0 || qualifiers.isRef || qualifiers.isRValueRef) {
+		return new QualifiedType(baseType, qualifiers);
 	}
-
-	// Apply pointer wrapping
-	if (qualifiers.numPtr > 0) {
-		result = new PointerType(result, qualifiers.numPtr);
-	}
-
-	// Apply restrict after pointers
-	if (qualifiers.isRestrict) {
-		result = new QualifiedType(result, {
-			isConst: false,
-			isVolatile: false,
-			isRestrict: true
-		});
-	}
-
-	// Apply reference wrapping
-	if (qualifiers.isRef) {
-		result = new ReferenceType(result, false);
-	} else if (qualifiers.isRValueRef) {
-		result = new ReferenceType(result, true);
-	}
-
-	return result;
+	return baseType;
 }
 
 function parseSingleType(encoding, substitutions = [], templateParams = []) {
@@ -790,10 +730,10 @@ function parseSingleType(encoding, substitutions = [], templateParams = []) {
 			const result = parser.parse(ctx);
 			if (result !== null && ctx.typeNode) {
 				const typeNode = applyQualifiers(ctx.typeNode, qualifiers);
-				return new ParseResult(typeNode, result);
+				return { typeNode, remaining: result };
 			}
 		}
 	}
 
-	return new ParseResult(null, nextChar);
+	return { typeNode: null, remaining: nextChar };
 }
