@@ -28,6 +28,165 @@ module.exports = {
 	}
 };
 
+class TypeNode {
+	accept(visitor) {
+		throw new Error('accept() must be implemented by subclass');
+	}
+}
+
+class NamedType extends TypeNode {
+	constructor(name) {
+		super();
+		this.name = name;
+	}
+
+	accept(visitor) {
+		return visitor.visitNamedType(this);
+	}
+}
+
+class QualifiedType extends TypeNode {
+	constructor(baseType, qualifiers = {}) {
+		super();
+		this.baseType = baseType;
+		this.isConst = qualifiers.isConst || false;
+		this.isVolatile = qualifiers.isVolatile || false;
+		this.isRestrict = qualifiers.isRestrict || false;
+		this.numPtr = qualifiers.numPtr || 0;
+		this.isRef = qualifiers.isRef || false;
+		this.isRValueRef = qualifiers.isRValueRef || false;
+	}
+
+	accept(visitor) {
+		return visitor.visitQualifiedType(this);
+	}
+}
+
+class ArrayType extends TypeNode {
+	constructor(elementType, dimensions = []) {
+		super();
+		this.elementType = elementType;
+		this.dimensions = dimensions;
+	}
+
+	accept(visitor) {
+		return visitor.visitArrayType(this);
+	}
+}
+
+class FunctionPointerType extends TypeNode {
+	constructor(returnType, paramTypes = []) {
+		super();
+		this.returnType = returnType;
+		this.paramTypes = paramTypes;
+	}
+
+	accept(visitor) {
+		return visitor.visitFunctionPointerType(this);
+	}
+}
+
+class MemberFunctionPointerType extends TypeNode {
+	constructor(classType, returnType, paramTypes = [], isConst = false) {
+		super();
+		this.classType = classType;
+		this.returnType = returnType;
+		this.paramTypes = paramTypes;
+		this.isConst = isConst;
+	}
+
+	accept(visitor) {
+		return visitor.visitMemberFunctionPointerType(this);
+	}
+}
+
+class TemplateType extends TypeNode {
+	constructor(baseName, templateArgs = []) {
+		super();
+		this.baseName = baseName;
+		this.templateArgs = templateArgs;
+	}
+
+	accept(visitor) {
+		return visitor.visitTemplateType(this);
+	}
+}
+
+class TypeVisitor {
+	visitNamedType(node) { throw new Error('visitNamedType not implemented'); }
+	visitQualifiedType(node) { throw new Error('visitQualifiedType not implemented'); }
+	visitArrayType(node) { throw new Error('visitArrayType not implemented'); }
+	visitFunctionPointerType(node) { throw new Error('visitFunctionPointerType not implemented'); }
+	visitMemberFunctionPointerType(node) { throw new Error('visitMemberFunctionPointerType not implemented'); }
+	visitTemplateType(node) { throw new Error('visitTemplateType not implemented'); }
+}
+
+class FormatVisitor extends TypeVisitor {
+	visitNamedType(node) {
+		return node.name;
+	}
+
+	visitQualifiedType(node) {
+		let result = '';
+
+		if (node.isConst) result += 'const ';
+		if (node.isVolatile) result += 'volatile ';
+
+		result += node.baseType.accept(this);
+
+        result += '*'.repeat(node.numPtr);
+
+		if (node.isRestrict) result += ' restrict';
+		if (node.isRef) result += '&';
+		if (node.isRValueRef) result += '&&';
+
+		return result;
+	}
+
+	visitArrayType(node) {
+		const baseFormat = node.elementType.accept(this);
+		const dimensionsStr = node.dimensions.map(dim => `[${dim}]`).join('');
+		return baseFormat + dimensionsStr;
+	}
+
+	visitFunctionPointerType(node) {
+		const params = this.formatParameterList(node.paramTypes);
+		const returnTypeStr = node.returnType.accept(this);
+		return `${returnTypeStr} (*)(${params})`;
+	}
+
+	visitMemberFunctionPointerType(node) {
+		const params = this.formatParameterList(node.paramTypes);
+		const returnTypeStr = node.returnType.accept(this);
+		const classTypeStr = node.classType.accept(this);
+		const constQualifier = node.isConst ? ' const' : '';
+		return `${returnTypeStr} (${classTypeStr}::*)(${params})${constQualifier}`;
+	}
+
+	visitTemplateType(node) {
+		if (node.templateArgs.length === 0) {
+			return node.baseName;
+		}
+		const args = node.templateArgs.map(arg => arg.accept(this)).join(', ');
+		return `${node.baseName}<${args}>`;
+	}
+
+	formatParameterList(types) {
+		if (types.length === 0) return '';
+		if (types.length === 1 && types[0] instanceof NamedType && types[0].name === 'void') {
+			return '';
+		}
+
+		return types.map(type => type.accept(this)).join(', ');
+	}
+
+	formatFunctionSignature(functionName, parameterTypes, isConst = false) {
+		const parameterList = this.formatParameterList(parameterTypes);
+		const constQualifier = isConst ? ' const' : '';
+		return `${functionName}(${parameterList})${constQualifier}`;
+	}
+}
+
 function buildSubstitutions(functionName, templateParams) {
 	const substitutions = [];
 	if (functionName.includes('::')) {
@@ -120,7 +279,6 @@ function getOperatorName(code) {
 	return operatorMap[code] || null;
 }
 
-// Strategy-based parsing for individual name segments (namespaces, classes, ctors, dtors, operators)
 const SEGMENT_PARSERS = [
 	{
 		matches: (str) => /^C[123]/.test(str),
@@ -251,6 +409,40 @@ function parseTemplateArgs(str, substitutions = []) {
 	return { args, str: remaining };
 }
 
+function parseTemplatePlaceholders(str) {
+	if (str[0] !== 'I') return { templateParams: [], str };
+
+	const templateParams = [];
+	let remaining = str.slice(1);
+
+	while (remaining.length > 0 && remaining[0] !== 'E') {
+		const { typeNode, remaining: newRemaining } = parseSingleType(remaining, [], []);
+		if (typeNode) templateParams.push(typeNode);
+		remaining = newRemaining;
+	}
+
+	return { templateParams, str: remaining[0] === 'E' ? remaining.slice(1) : remaining };
+}
+
+function parseTypeList(encoding, substitutions = [], templateParams = []) {
+	const types = [];
+	let remaining = encoding;
+
+	while (remaining.length > 0) {
+		const { typeNode, remaining: newRemaining } = parseSingleType(remaining, substitutions, templateParams);
+		
+		if (typeNode) {
+			types.push(typeNode);
+			const visitor = new FormatVisitor();
+			substitutions.push(typeNode.accept(visitor));
+			remaining = newRemaining;
+		} else {
+			// Skip unrecognized characters
+			remaining = remaining.slice(1);
+		}
+	}	return { types };
+}
+
 function parseArrayType(str, substitutions = [], templateParams = []) {
 	const sizeMatch = /^(\d+)_/.exec(str);
 	if (!sizeMatch) return { typeNode: null, str };
@@ -286,81 +478,6 @@ function parseFunctionSignature(str, substitutions = [], templateParams = []) {
 	}
 
 	return { returnType, params, remaining: remaining[0] === 'E' ? remaining.slice(1) : remaining };
-}
-
-class TypeVisitor {
-	visitNamedType(node) { throw new Error('visitNamedType not implemented'); }
-	visitQualifiedType(node) { throw new Error('visitQualifiedType not implemented'); }
-	visitArrayType(node) { throw new Error('visitArrayType not implemented'); }
-	visitFunctionPointerType(node) { throw new Error('visitFunctionPointerType not implemented'); }
-	visitMemberFunctionPointerType(node) { throw new Error('visitMemberFunctionPointerType not implemented'); }
-	visitTemplateType(node) { throw new Error('visitTemplateType not implemented'); }
-}
-
-class FormatVisitor extends TypeVisitor {
-	visitNamedType(node) {
-		return node.name;
-	}
-
-	visitQualifiedType(node) {
-		let result = '';
-
-		if (node.isConst) result += 'const ';
-		if (node.isVolatile) result += 'volatile ';
-
-		result += node.baseType.accept(this);
-
-        result += '*'.repeat(node.numPtr);
-
-		if (node.isRestrict) result += ' restrict';
-		if (node.isRef) result += '&';
-		if (node.isRValueRef) result += '&&';
-
-		return result;
-	}
-
-	visitArrayType(node) {
-		const baseFormat = node.elementType.accept(this);
-		const dimensionsStr = node.dimensions.map(dim => `[${dim}]`).join('');
-		return baseFormat + dimensionsStr;
-	}
-
-	visitFunctionPointerType(node) {
-		const params = this.formatParameterList(node.paramTypes);
-		const returnTypeStr = node.returnType.accept(this);
-		return `${returnTypeStr} (*)(${params})`;
-	}
-
-	visitMemberFunctionPointerType(node) {
-		const params = this.formatParameterList(node.paramTypes);
-		const returnTypeStr = node.returnType.accept(this);
-		const classTypeStr = node.classType.accept(this);
-		const constQualifier = node.isConst ? ' const' : '';
-		return `${returnTypeStr} (${classTypeStr}::*)(${params})${constQualifier}`;
-	}
-
-	visitTemplateType(node) {
-		if (node.templateArgs.length === 0) {
-			return node.baseName;
-		}
-		const args = node.templateArgs.map(arg => arg.accept(this)).join(', ');
-		return `${node.baseName}<${args}>`;
-	}
-
-	formatParameterList(types) {
-		if (types.length === 0) return '';
-		if (types.length === 1 && types[0] instanceof NamedType && types[0].name === 'void') {
-			return '';
-		}
-
-		return types.map(type => type.accept(this)).join(', ');
-	}
-
-	formatFunctionSignature(functionName, parameterTypes, isConst = false) {
-		const parameterList = this.formatParameterList(parameterTypes);
-		const constQualifier = isConst ? ' const' : '';
-		return `${functionName}(${parameterList})${constQualifier}`;
-	}
 }
 
 function parseFunctionType(str, substitutions = [], templateParams = []) {
@@ -448,122 +565,40 @@ function parseStdType(str, substitutions = []) {
 	return { typeNode: null, str };
 }
 
-function parseTemplatePlaceholders(str) {
-	if (str[0] !== 'I') return { templateParams: [], str };
+function parseQualifiers(str) {
+	const qualifiers = {
+		isRef: false,
+		isRValueRef: false,
+		isRestrict: false,
+		isVolatile: false,
+		isConst: false,
+		numPtr: 0
+	};
 
-	const templateParams = [];
-	let remaining = str.slice(1);
+	let remaining = str;
+	const qualifierActions = {
+		R: () => qualifiers.isRef = true,
+		O: () => qualifiers.isRValueRef = true,
+		r: () => qualifiers.isRestrict = true,
+		V: () => qualifiers.isVolatile = true,
+		K: () => qualifiers.isConst = true,
+		P: () => qualifiers.numPtr++
+	};
 
-	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { typeNode, remaining: newRemaining } = parseSingleType(remaining, [], []);
-		if (typeNode) templateParams.push(typeNode);
-		remaining = newRemaining;
+	while (qualifierActions[remaining[0]]) {
+		qualifierActions[remaining[0]]();
+		remaining = remaining.slice(1);
 	}
 
-	return { templateParams, str: remaining[0] === 'E' ? remaining.slice(1) : remaining };
+	return { qualifiers, remaining };
 }
 
-function parseTypeList(encoding, substitutions = [], templateParams = []) {
-	const types = [];
-	let remaining = encoding;
-
-	while (remaining.length > 0) {
-		const { typeNode, remaining: newRemaining } = parseSingleType(remaining, substitutions, templateParams);
-		
-		if (typeNode) {
-			types.push(typeNode);
-			const visitor = new FormatVisitor();
-			substitutions.push(typeNode.accept(visitor));
-			remaining = newRemaining;
-		} else {
-			// Skip unrecognized characters
-			remaining = remaining.slice(1);
-		}
-	}	return { types };
-}
-
-class TypeNode {
-	accept(visitor) {
-		throw new Error('accept() must be implemented by subclass');
+function applyQualifiers(baseType, qualifiers) {
+	if (qualifiers.isConst || qualifiers.isVolatile || qualifiers.isRestrict ||
+		qualifiers.numPtr > 0 || qualifiers.isRef || qualifiers.isRValueRef) {
+		return new QualifiedType(baseType, qualifiers);
 	}
-}
-
-class NamedType extends TypeNode {
-	constructor(name) {
-		super();
-		this.name = name;
-	}
-
-	accept(visitor) {
-		return visitor.visitNamedType(this);
-	}
-}
-
-class QualifiedType extends TypeNode {
-	constructor(baseType, qualifiers = {}) {
-		super();
-		this.baseType = baseType;
-		this.isConst = qualifiers.isConst || false;
-		this.isVolatile = qualifiers.isVolatile || false;
-		this.isRestrict = qualifiers.isRestrict || false;
-		this.numPtr = qualifiers.numPtr || 0;
-		this.isRef = qualifiers.isRef || false;
-		this.isRValueRef = qualifiers.isRValueRef || false;
-	}
-
-	accept(visitor) {
-		return visitor.visitQualifiedType(this);
-	}
-}
-
-class ArrayType extends TypeNode {
-	constructor(elementType, dimensions = []) {
-		super();
-		this.elementType = elementType;
-		this.dimensions = dimensions;
-	}
-
-	accept(visitor) {
-		return visitor.visitArrayType(this);
-	}
-}
-
-class FunctionPointerType extends TypeNode {
-	constructor(returnType, paramTypes = []) {
-		super();
-		this.returnType = returnType;
-		this.paramTypes = paramTypes;
-	}
-
-	accept(visitor) {
-		return visitor.visitFunctionPointerType(this);
-	}
-}
-
-class MemberFunctionPointerType extends TypeNode {
-	constructor(classType, returnType, paramTypes = [], isConst = false) {
-		super();
-		this.classType = classType;
-		this.returnType = returnType;
-		this.paramTypes = paramTypes;
-		this.isConst = isConst;
-	}
-
-	accept(visitor) {
-		return visitor.visitMemberFunctionPointerType(this);
-	}
-}
-
-class TemplateType extends TypeNode {
-	constructor(baseName, templateArgs = []) {
-		super();
-		this.baseName = baseName;
-		this.templateArgs = templateArgs;
-	}
-
-	accept(visitor) {
-		return visitor.visitTemplateType(this);
-	}
+	return baseType;
 }
 
 const TYPE_PARSERS = [
@@ -673,43 +708,6 @@ const TYPE_PARSERS = [
 		}
 	}
 ];
-
-function parseQualifiers(str) {
-	const qualifiers = {
-		isRef: false,
-		isRValueRef: false,
-		isRestrict: false,
-		isVolatile: false,
-		isConst: false,
-		numPtr: 0
-	};
-
-	let remaining = str;
-	const qualifierActions = {
-		R: () => qualifiers.isRef = true,
-		O: () => qualifiers.isRValueRef = true,
-		r: () => qualifiers.isRestrict = true,
-		V: () => qualifiers.isVolatile = true,
-		K: () => qualifiers.isConst = true,
-		P: () => qualifiers.numPtr++
-	};
-
-	while (qualifierActions[remaining[0]]) {
-		qualifierActions[remaining[0]]();
-		remaining = remaining.slice(1);
-	}
-
-	return { qualifiers, remaining };
-}
-
-function applyQualifiers(baseType, qualifiers) {
-	// Check if there are any qualifiers to apply
-	if (qualifiers.isConst || qualifiers.isVolatile || qualifiers.isRestrict ||
-		qualifiers.numPtr > 0 || qualifiers.isRef || qualifiers.isRValueRef) {
-		return new QualifiedType(baseType, qualifiers);
-	}
-	return baseType;
-}
 
 function parseSingleType(encoding, substitutions = [], templateParams = []) {
 	const { qualifiers, remaining } = parseQualifiers(encoding);
