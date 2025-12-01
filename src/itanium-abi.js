@@ -34,8 +34,9 @@ function buildSubstitutions(functionName, templateParams) {
 		const lastColonIndex = functionName.lastIndexOf('::');
 		substitutions.push(functionName.substring(0, lastColonIndex));
 	}
+	const visitor = new FormatVisitor();
 	for (const param of templateParams) {
-		substitutions.push(param.format());
+		substitutions.push(param.accept(visitor));
 	}
 	return substitutions;
 }
@@ -178,7 +179,8 @@ function parseSegmentWithTemplate(remaining, className) {
 	if (!args) return { segment, remaining: afterSegment };
 	
 	const templateType = new TemplateType(segment, args);
-	return { segment: templateType.format(), remaining: str };
+	const visitor = new FormatVisitor();
+	return { segment: templateType.accept(visitor), remaining: str };
 }
 
 function parseNamespaceSegments(remaining, initialSegments = []) {
@@ -206,7 +208,8 @@ function parseEncodedName(str) {
 		const { args, str: after } = parseTemplateArgs(remaining, []);
 		if (args && args.length > 0 && /\d/.test(remaining[1])) {
 			const templateType = new TemplateType(segment, args);
-			return { name: templateType.format(), str: after, isConst: false };
+			const visitor = new FormatVisitor();
+			return { name: templateType.accept(visitor), str: after, isConst: false };
 		}
 		
 		return { name: segment, str: remaining, isConst: false };
@@ -299,32 +302,94 @@ function parseFunctionSignature(str, substitutions = [], templateParams = []) {
 	return { returnType, params, remaining: remaining[0] === 'E' ? remaining.slice(1) : remaining };
 }
 
-/**
- * Utility class for formatting type information
- * Follows Single Responsibility Principle - only handles formatting
- */
+class TypeVisitor {
+	visitBasicType(node) { throw new Error('visitBasicType not implemented'); }
+	visitNamedType(node) { throw new Error('visitNamedType not implemented'); }
+	visitQualifiedType(node) { throw new Error('visitQualifiedType not implemented'); }
+	visitPointerType(node) { throw new Error('visitPointerType not implemented'); }
+	visitReferenceType(node) { throw new Error('visitReferenceType not implemented'); }
+	visitArrayType(node) { throw new Error('visitArrayType not implemented'); }
+	visitFunctionPointerType(node) { throw new Error('visitFunctionPointerType not implemented'); }
+	visitMemberFunctionPointerType(node) { throw new Error('visitMemberFunctionPointerType not implemented'); }
+	visitTemplateType(node) { throw new Error('visitTemplateType not implemented'); }
+}
+
+class FormatVisitor extends TypeVisitor {
+	visitBasicType(node) {
+		return node.name;
+	}
+
+	visitNamedType(node) {
+		return node.name;
+	}
+
+	visitQualifiedType(node) {
+		let result = '';
+		if (node.isConst) result += 'const ';
+		if (node.isVolatile) result += 'volatile ';
+		result += node.baseType.accept(this);
+		if (node.isRestrict) result += ' restrict';
+		return result;
+	}
+
+	visitPointerType(node) {
+		return node.pointeeType.accept(this) + '*'.repeat(node.count);
+	}
+
+	visitReferenceType(node) {
+		return node.referencedType.accept(this) + (node.isRValue ? '&&' : '&');
+	}
+
+	visitArrayType(node) {
+		const baseFormat = node.elementType.accept(this);
+		const dimensionsStr = node.dimensions.map(dim => `[${dim}]`).join('');
+		return baseFormat + dimensionsStr;
+	}
+
+	visitFunctionPointerType(node) {
+		const formattedParams = node.paramTypes.map(p => p.accept(this));
+		const params = this._formatParamList(formattedParams);
+		const returnTypeStr = node.returnType.accept(this);
+		return `${returnTypeStr} (*)(${params})`;
+	}
+
+	visitMemberFunctionPointerType(node) {
+		const formattedParams = node.paramTypes.map(p => p.accept(this));
+		const params = this._formatParamList(formattedParams);
+		const returnTypeStr = node.returnType.accept(this);
+		const classTypeStr = node.classType.accept(this);
+		const constQualifier = node.isConst ? ' const' : '';
+		return `${returnTypeStr} (${classTypeStr}::*)(${params})${constQualifier}`;
+	}
+
+	visitTemplateType(node) {
+		if (node.templateArgs.length === 0) {
+			return node.baseName;
+		}
+		const args = node.templateArgs.map(arg => arg.accept(this)).join(', ');
+		return `${node.baseName}<${args}>`;
+	}
+
+	_formatParamList(params) {
+		if (params.length === 0) return '';
+		if (params.length === 1 && params[0] === 'void') return '';
+		return params.join(', ');
+	}
+}
+
 class TypeFormatter {
-	/**
-	 * Formats a parameter list, handling the special case of void
-	 */
 	static formatParameterList(params) {
 		if (params.length === 0) return '';
 		if (params.length === 1 && params[0] === 'void') return '';
 		return params.join(', ');
 	}
 
-	/**
-	 * Formats a type node to a string
-	 */
 	static formatType(type) {
 		if (!type) return '';
 		if (typeof type === 'string') return type;
-		return type.format();
+		return type.accept(new FormatVisitor());
 	}
 
-	/**
-	 * Formats an array of types
-	 */
 	static formatTypeList(types) {
 		return types.map(t => this.formatType(t));
 	}
@@ -455,8 +520,8 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 }
 
 class TypeNode {
-	format() {
-		throw new Error('format() must be implemented by subclass');
+	accept(visitor) {
+		throw new Error('accept() must be implemented by subclass');
 	}
 }
 
@@ -466,8 +531,8 @@ class BasicType extends TypeNode {
 		this.name = name;
 	}
 
-	format() {
-		return this.name;
+	accept(visitor) {
+		return visitor.visitBasicType(this);
 	}
 }
 
@@ -477,8 +542,8 @@ class NamedType extends TypeNode {
 		this.name = name;
 	}
 
-	format() {
-		return this.name;
+	accept(visitor) {
+		return visitor.visitNamedType(this);
 	}
 }
 
@@ -491,13 +556,8 @@ class QualifiedType extends TypeNode {
 		this.isRestrict = qualifiers.isRestrict || false;
 	}
 
-	format() {
-		let result = '';
-		if (this.isConst) result += 'const ';
-		if (this.isVolatile) result += 'volatile ';
-		result += this.baseType.format();
-		if (this.isRestrict) result += ' restrict';
-		return result;
+	accept(visitor) {
+		return visitor.visitQualifiedType(this);
 	}
 }
 
@@ -508,8 +568,8 @@ class PointerType extends TypeNode {
 		this.count = count;
 	}
 
-	format() {
-		return this.pointeeType.format() + '*'.repeat(this.count);
+	accept(visitor) {
+		return visitor.visitPointerType(this);
 	}
 }
 
@@ -520,8 +580,8 @@ class ReferenceType extends TypeNode {
 		this.isRValue = isRValue;
 	}
 
-	format() {
-		return this.referencedType.format() + (this.isRValue ? '&&' : '&');
+	accept(visitor) {
+		return visitor.visitReferenceType(this);
 	}
 }
 
@@ -529,13 +589,11 @@ class ArrayType extends TypeNode {
 	constructor(elementType, dimensions = []) {
 		super();
 		this.elementType = elementType;
-		this.dimensions = dimensions; // Array of sizes
+		this.dimensions = dimensions;
 	}
 
-	format() {
-		const baseFormat = this.elementType.format();
-		const dimensionsStr = this.dimensions.map(dim => `[${dim}]`).join('');
-		return baseFormat + dimensionsStr;
+	accept(visitor) {
+		return visitor.visitArrayType(this);
 	}
 }
 
@@ -546,17 +604,8 @@ class FunctionPointerType extends TypeNode {
 		this.paramTypes = paramTypes;
 	}
 
-	format() {
-		const formattedParams = this.paramTypes.map(p => p.format());
-		const params = this._formatParamList(formattedParams);
-		const returnTypeStr = this.returnType.format();
-		return `${returnTypeStr} (*)(${params})`;
-	}
-
-	_formatParamList(params) {
-		if (params.length === 0) return '';
-		if (params.length === 1 && params[0] === 'void') return '';
-		return params.join(', ');
+	accept(visitor) {
+		return visitor.visitFunctionPointerType(this);
 	}
 }
 
@@ -569,19 +618,8 @@ class MemberFunctionPointerType extends TypeNode {
 		this.isConst = isConst;
 	}
 
-	format() {
-		const formattedParams = this.paramTypes.map(p => p.format());
-		const params = this._formatParamList(formattedParams);
-		const returnTypeStr = this.returnType.format();
-		const classTypeStr = this.classType.format();
-		const constQualifier = this.isConst ? ' const' : '';
-		return `${returnTypeStr} (${classTypeStr}::*)(${params})${constQualifier}`;
-	}
-
-	_formatParamList(params) {
-		if (params.length === 0) return '';
-		if (params.length === 1 && params[0] === 'void') return '';
-		return params.join(', ');
+	accept(visitor) {
+		return visitor.visitMemberFunctionPointerType(this);
 	}
 }
 
@@ -589,15 +627,11 @@ class TemplateType extends TypeNode {
 	constructor(baseName, templateArgs = []) {
 		super();
 		this.baseName = baseName;
-		this.templateArgs = templateArgs; // Array of TypeNode instances
+		this.templateArgs = templateArgs;
 	}
 
-	format() {
-		if (this.templateArgs.length === 0) {
-			return this.baseName;
-		}
-		const args = this.templateArgs.map(arg => arg.format()).join(', ');
-		return `${this.baseName}<${args}>`;
+	accept(visitor) {
+		return visitor.visitTemplateType(this);
 	}
 }
 
@@ -724,7 +758,8 @@ const TYPE_PARSERS = [
 			
 			const { args, str } = parseTemplateArgs(result.str, ctx.substitutions);
 			if (args && args.length > 0) {
-				const baseName = result.typeNode.format();
+				const visitor = new FormatVisitor();
+				const baseName = result.typeNode.accept(visitor);
 				ctx.typeNode = new TemplateType(baseName, args);
 			} else {
 				ctx.typeNode = result.typeNode;
@@ -828,12 +863,9 @@ class TypeParseNode {
 		this.templateType = null;
 	}
 
-	format() {
-		return this.typeNode ? this.typeNode.format() : '';
-	}
-
 	toString() {
-		let result = this.format();
+		const visitor = new FormatVisitor();
+		let result = this.typeNode ? this.typeNode.accept(visitor) : '';
 		if (this.templateStart) result += '<';
 		if (this.templateEnd) result += '>';
 		return result;
