@@ -102,6 +102,18 @@ class MemberFunctionPointerType extends TypeNode {
 	}
 }
 
+class MemberPointerType extends TypeNode {
+	constructor(classType, memberType) {
+		super();
+		this.classType = classType;
+		this.memberType = memberType;
+	}
+
+	accept(visitor) {
+		return visitor.visitMemberPointerType(this);
+	}
+}
+
 class TemplateType extends TypeNode {
 	constructor(baseName, templateArgs = []) {
 		super();
@@ -120,6 +132,7 @@ class TypeVisitor {
 	visitArrayType(node) { throw new Error('visitArrayType not implemented'); }
 	visitFunctionPointerType(node) { throw new Error('visitFunctionPointerType not implemented'); }
 	visitMemberFunctionPointerType(node) { throw new Error('visitMemberFunctionPointerType not implemented'); }
+	visitMemberPointerType(node) { throw new Error('visitMemberPointerType not implemented'); }
 	visitTemplateType(node) { throw new Error('visitTemplateType not implemented'); }
 }
 
@@ -163,6 +176,12 @@ class FormatVisitor extends TypeVisitor {
 		const classTypeStr = node.classType.accept(this);
 		const constQualifier = node.isConst ? ' const' : '';
 		return `${returnTypeStr} (${classTypeStr}::*)(${params})${constQualifier}`;
+	}
+
+	visitMemberPointerType(node) {
+		const memberTypeStr = node.memberType.accept(this);
+		const classTypeStr = node.classType.accept(this);
+		return `${memberTypeStr} ${classTypeStr}::**`;
 	}
 
 	visitTemplateType(node) {
@@ -491,13 +510,22 @@ function parseMemberFunctionPointer(str, substitutions = [], templateParams = []
 	const isConst = remaining[0] === 'K';
 	if (isConst) remaining = remaining.slice(1);
 
-	if (remaining[0] !== 'F') return { typeNode: null, str };
+	// If it's a function pointer (has 'F' marker)
+	if (remaining[0] === 'F') {
+		const { returnType, params, remaining: afterSignature } = parseFunctionSignature(remaining.slice(1), substitutions, templateParams);
+		if (!returnType) return { typeNode: null, str };
 
-	const { returnType, params, remaining: afterSignature } = parseFunctionSignature(remaining.slice(1), substitutions, templateParams);
-	if (!returnType) return { typeNode: null, str };
+		const typeNode = new MemberFunctionPointerType(classType, returnType, params, isConst);
+		return { typeNode, str: afterSignature };
+	}
 
-	const typeNode = new MemberFunctionPointerType(classType, returnType, params, isConst);
-	return { typeNode, str: afterSignature };
+	// Otherwise it's a pointer to member data - parse the member type
+	const { typeNode: memberType, remaining: afterMember } = parseSingleType(remaining, substitutions, templateParams);
+	if (!memberType) return { typeNode: null, str };
+
+	// Create a special representation for pointer-to-member-data
+	const typeNode = new MemberPointerType(classType, memberType);
+	return { typeNode, str: afterMember };
 }
 
 function parseTemplateParam(str, templateParams = []) {
@@ -655,6 +683,7 @@ const TYPE_PARSERS = [
 			const result = parseMemberFunctionPointer(ctx.remaining, ctx.substitutions, ctx.templateParams);
 			if (result.typeNode) {
 				ctx.typeNode = result.typeNode;
+				ctx.qualifiers.numPtr = 0;  // Member pointer notation already includes the pointer
 				return result.str;
 			}
 			return null;

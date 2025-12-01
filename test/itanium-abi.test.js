@@ -889,4 +889,9 @@ describe('error handling and edge cases', () => {
 		assert.equal(itanium_abi.demangle("_Z3fooIiPFidEiEvv"), "void foo<int, int (*)(double), int>()");
 		done();
 	});
+
+	it('handles pointers to member data', (done) => {
+		assert.equal(itanium_abi.demangle("_Z3fooPM2ABi"), "foo(int AB::**)");
+		done();
+	});
 });
