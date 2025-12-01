@@ -22,7 +22,8 @@ module.exports = {
 		let remaining = skipReturnTypeIfNeeded(afterTemplate, templateParams, substitutions);
 
 		const { types } = parseTypeList(remaining, substitutions, templateParams);
-		const parameterList = TypeFormatter.serializeTypeList(types);
+		const visitor = new FormatVisitor();
+		const parameterList = visitor.formatParameterList(types);
 
 		return `${functionName}(${parameterList})${isConst ? ' const' : ''}`;
 	}
@@ -337,15 +338,13 @@ class FormatVisitor extends TypeVisitor {
 	}
 
 	visitFunctionPointerType(node) {
-		const formattedParams = node.paramTypes.map(p => p.accept(this));
-		const params = this._formatParamList(formattedParams);
+		const params = this.formatParameterList(node.paramTypes);
 		const returnTypeStr = node.returnType.accept(this);
 		return `${returnTypeStr} (*)(${params})`;
 	}
 
 	visitMemberFunctionPointerType(node) {
-		const formattedParams = node.paramTypes.map(p => p.accept(this));
-		const params = this._formatParamList(formattedParams);
+		const params = this.formatParameterList(node.paramTypes);
 		const returnTypeStr = node.returnType.accept(this);
 		const classTypeStr = node.classType.accept(this);
 		const constQualifier = node.isConst ? ' const' : '';
@@ -360,28 +359,13 @@ class FormatVisitor extends TypeVisitor {
 		return `${node.baseName}<${args}>`;
 	}
 
-	_formatParamList(params) {
-		if (params.length === 0) return '';
-		if (params.length === 1 && params[0] === 'void') return '';
-		return params.join(', ');
-	}
-}
+	formatParameterList(types) {
+		if (types.length === 0) return '';
+		if (types.length === 1 && types[0] instanceof BasicType && types[0].name === 'void') {
+			return '';
+		}
 
-class TypeFormatter {
-	static formatParameterList(params) {
-		if (params.length === 0) return '';
-		if (params.length === 1 && params[0] === 'void') return '';
-		return params.join(', ');
-	}
-
-	static formatType(type) {
-		if (!type) return '';
-		if (typeof type === 'string') return type;
-		return type.accept(new FormatVisitor());
-	}
-
-	static formatTypeList(types) {
-		return types.map(t => this.formatType(t));
+		return types.map(type => type.accept(this)).join(', ');
 	}
 }
 
@@ -829,16 +813,4 @@ function parseSingleType(encoding, substitutions = [], templateParams = []) {
 	}
 
 	return new ParseResult(null, nextChar);
-}
-
-TypeFormatter.serializeTypeList = function (types) {
-	if (types.length === 0) return '';
-	
-	// Special case: single void parameter should be empty
-	if (types.length === 1 && types[0] instanceof BasicType && types[0].name === 'void') {
-		return '';
-	}
-
-	const visitor = new FormatVisitor();
-	return types.map(type => type.accept(visitor)).join(', ');
 }
