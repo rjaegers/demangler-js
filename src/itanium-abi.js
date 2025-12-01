@@ -175,10 +175,10 @@ function parseStdPrefix(originalStr, remaining) {
 function parseSegmentWithTemplate(remaining, className) {
 	const { segment, remaining: afterSegment } = parseNameSegment(remaining, className);
 	if (!segment) return { segment: null, remaining };
-	
+
 	const { args, str } = parseTemplateArgs(afterSegment, []);
 	if (!args) return { segment, remaining: afterSegment };
-	
+
 	const templateType = new TemplateType(segment, args);
 	const visitor = new FormatVisitor();
 	return { segment: templateType.accept(visitor), remaining: str };
@@ -205,17 +205,17 @@ function parseEncodedName(str) {
 	if (str[0] !== 'N') {
 		const { segment, remaining } = parseNameSegment(str);
 		if (!segment) return { name: '', str, isConst: false };
-		
+
 		const { args, str: after } = parseTemplateArgs(remaining, []);
 		if (args && args.length > 0 && /\d/.test(remaining[1])) {
 			const templateType = new TemplateType(segment, args);
 			const visitor = new FormatVisitor();
 			return { name: templateType.accept(visitor), str: after, isConst: false };
 		}
-		
+
 		return { name: segment, str: remaining, isConst: false };
 	}
-	
+
 	let remaining = str.slice(1);
 	const { isConst, remaining: afterConst } = parseConstQualifier(remaining);
 	const { segments: stdSegments, remaining: afterStd } = parseStdPrefix(str, afterConst);
@@ -226,11 +226,11 @@ function parseEncodedName(str) {
 
 function parseTemplateArgs(str, substitutions = []) {
 	if (str[0] !== 'I') return { args: null, str };
-	
+
 	const isLengthPrefixed = str[1] && /\d/.test(str[1]);
 	let remaining = str.slice(1);
 	const args = [];
-	
+
 	if (isLengthPrefixed) {
 		while (remaining.length > 0 && remaining[0] !== 'E') {
 			const { value, remaining: after } = parseLengthPrefixed(remaining);
@@ -247,7 +247,7 @@ function parseTemplateArgs(str, substitutions = []) {
 			remaining = after;
 		}
 	}
-	
+
 	if (remaining[0] === 'E') remaining = remaining.slice(1);
 	return { args, str: remaining };
 }
@@ -470,7 +470,7 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 
 	while (remaining.length > 0) {
 		const { typeNode, remaining: newRemaining } = parseTypeHelper(remaining, substitutions, templateParams);
-		
+
 		if (typeNode) {
 			types.push(typeNode);
 			const visitor = new FormatVisitor();
@@ -681,7 +681,7 @@ const TYPE_PARSERS = [
 		parse: (ctx) => {
 			const result = parseStdType(ctx.remaining, ctx.substitutions);
 			if (!result.typeNode) return null;
-			
+
 			const { args, str } = parseTemplateArgs(result.str, ctx.substitutions);
 			if (args && args.length > 0) {
 				const visitor = new FormatVisitor();
@@ -690,7 +690,7 @@ const TYPE_PARSERS = [
 			} else {
 				ctx.typeNode = result.typeNode;
 			}
-			
+
 			return str;
 		}
 	},
