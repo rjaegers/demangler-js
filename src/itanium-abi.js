@@ -251,18 +251,8 @@ function parseTemplateArgs(str, substitutions = []) {
 	return { args, str: remaining };
 }
 
-/**
- * Helper function to parse a single type
- * Wraps parseSingleType with default parameters
- * Returns {typeNode, remaining} for use in other parsers
- */
 const parseTypeHelper = (str, substitutions = [], templateParams = []) => {
-	const result = parseSingleType(str, [], 0, [], substitutions, templateParams);
-	return {
-		typeNode: result.typeNode,
-		parseNode: result.parseNode,
-		remaining: result.remaining
-	};
+	return parseSingleType(str, substitutions, templateParams);
 }
 
 function parseArrayType(str, substitutions = [], templateParams = []) {
@@ -498,22 +488,19 @@ function parseTemplatePlaceholders(str) {
 function parseTypeList(encoding, substitutions = [], templateParams = []) {
 	const types = [];
 	let remaining = encoding;
-	let templateDepth = 0;
-	let templateStack = [];
 
 	while (remaining.length > 0) {
-		const result = parseSingleType(remaining, types, templateDepth, templateStack, substitutions, templateParams);
-
-		if (result.parseNode) {
-			types.push(result.parseNode);
-			if (!result.parseNode.templateStart && !result.parseNode.templateEnd && result.parseNode.typeNode) {
-				substitutions.push(result.parseNode.toString());
-			}
+		const { typeNode, remaining: newRemaining } = parseTypeHelper(remaining, substitutions, templateParams);
+		
+		if (typeNode) {
+			types.push(typeNode);
+			const visitor = new FormatVisitor();
+			substitutions.push(typeNode.accept(visitor));
+			remaining = newRemaining;
+		} else {
+			// Skip unrecognized characters
+			remaining = remaining.slice(1);
 		}
-
-		remaining = result.remaining;
-		templateDepth = result.templateDepth;
-		templateStack = result.templateStack;
 	}
 
 	return { types };
@@ -636,42 +623,13 @@ class TemplateType extends TypeNode {
 }
 
 class ParseResult {
-	constructor(parseNode, remaining, templateDepth, templateStack) {
-		this.parseNode = parseNode;
-		this.typeNode = parseNode ? parseNode.typeNode : null;
+	constructor(typeNode, remaining) {
+		this.typeNode = typeNode;
 		this.remaining = remaining;
-		this.templateDepth = templateDepth;
-		this.templateStack = templateStack;
 	}
 }
 
 const TYPE_PARSERS = [
-	{
-		matches: (char) => char === 'I',
-		parse: (ctx) => {
-			const lastType = ctx.types[ctx.types.length - 1];
-			if (lastType) {
-				lastType.templateStart = true;
-				ctx.templateStack.push(lastType);
-			}
-			return new ParseResult(null, ctx.remaining, ctx.templateDepth + 1, ctx.templateStack);
-		},
-		isTemplateMarker: true
-	},
-	{
-		matches: (char) => char === 'E',
-		parse: (ctx) => {
-			if (ctx.templateDepth <= 0) {
-				return new ParseResult(null, ctx.remaining, ctx.templateDepth, ctx.templateStack);
-			}
-			const wrapper = new TypeParseNode(null);
-			wrapper.templateEnd = true;
-			const newDepth = ctx.templateDepth - 1;
-			wrapper.templateType = ctx.templateStack[newDepth];
-			return new ParseResult(wrapper, ctx.remaining, newDepth, ctx.templateStack.slice(0, -1));
-		},
-		isTemplateMarker: true
-	},
 	{
 		basicTypes: {
 			'v': 'void',
@@ -779,11 +737,6 @@ const TYPE_PARSERS = [
 	}
 ];
 
-/**
- * Parses type qualifiers (const, volatile, restrict, pointers, references)
- * Returns the parsed qualifiers and remaining string
- * This is pure parsing - no formatting logic
- */
 function parseQualifiers(str) {
 	const qualifiers = {
 		isRef: false,
@@ -851,40 +804,11 @@ function applyQualifiers(baseType, qualifiers) {
 	return result;
 }
 
-/**
- * Wrapper class to track template markers during parsing
- * Used to maintain template start/end markers for proper serialization
- */
-class TypeParseNode {
-	constructor(typeNode) {
-		this.typeNode = typeNode;
-		this.templateStart = false;
-		this.templateEnd = false;
-		this.templateType = null;
-	}
-
-	toString() {
-		const visitor = new FormatVisitor();
-		let result = this.typeNode ? this.typeNode.accept(visitor) : '';
-		if (this.templateStart) result += '<';
-		if (this.templateEnd) result += '>';
-		return result;
-	}
-
-	isQualified() {
-		return this.typeNode instanceof QualifiedType ||
-			this.typeNode instanceof PointerType ||
-			this.typeNode instanceof ReferenceType;
-	}
-}
-
-function parseSingleType(encoding, types, templateDepth, templateStack, substitutions = [], templateParams = []) {
+function parseSingleType(encoding, substitutions = [], templateParams = []) {
 	const { qualifiers, remaining } = parseQualifiers(encoding);
 
 	const currentChar = remaining[0];
 	const nextChar = remaining.slice(1);
-
-	let typeNode = null;
 
 	for (const parser of TYPE_PARSERS) {
 		if (parser.matches(currentChar, qualifiers)) {
@@ -894,46 +818,27 @@ function parseSingleType(encoding, types, templateDepth, templateStack, substitu
 				typeNode: null,
 				qualifiers,
 				substitutions,
-				templateParams,
-				types,
-				templateDepth,
-				templateStack
+				templateParams
 			};
-			if (parser.isTemplateMarker) return parser.parse(ctx);
 			const result = parser.parse(ctx);
 			if (result !== null && ctx.typeNode) {
-				typeNode = applyQualifiers(ctx.typeNode, qualifiers);
-				const wrapper = new TypeParseNode(typeNode);
-				return new ParseResult(wrapper, result, templateDepth, templateStack);
+				const typeNode = applyQualifiers(ctx.typeNode, qualifiers);
+				return new ParseResult(typeNode, result);
 			}
 		}
 	}
 
-	return new ParseResult(null, nextChar, templateDepth, templateStack);
-}
-
-TypeFormatter.needsTypeSeparator = function (index, type, prevType) {
-	return index > 0 && !type.templateEnd && !(prevType && prevType.templateStart);
-}
-
-TypeFormatter.processTypeForSerialization = function (type, result, index, prevType, templateDepth) {
-	if (this.needsTypeSeparator(index, type, prevType)) result.push(', ');
-	result.push(type.toString());
-	return templateDepth + (type.templateStart ? 1 : 0) + (type.templateEnd ? -1 : 0);
+	return new ParseResult(null, nextChar);
 }
 
 TypeFormatter.serializeTypeList = function (types) {
-	const result = [];
-	let templateDepth = 0;
-
-	// Special case: single void parameter with no qualifiers should be empty
-	if (types.length === 1 && types[0].typeNode instanceof BasicType && types[0].typeNode.name === 'void' && !types[0].isQualified()) {
+	if (types.length === 0) return '';
+	
+	// Special case: single void parameter should be empty
+	if (types.length === 1 && types[0] instanceof BasicType && types[0].name === 'void') {
 		return '';
 	}
 
-	for (let i = 0; i < types.length; i++) {
-		templateDepth = this.processTypeForSerialization(types[i], result, i, types[i - 1], templateDepth);
-	}
-
-	return result.join('');
+	const visitor = new FormatVisitor();
+	return types.map(type => type.accept(visitor)).join(', ');
 }
