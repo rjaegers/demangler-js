@@ -191,13 +191,10 @@ function buildSubstitutions(functionName, templateParams) {
 	const substitutions = [];
 	if (functionName.includes('::')) {
 		const lastColonIndex = functionName.lastIndexOf('::');
-		substitutions.push(functionName.substring(0, lastColonIndex));
+		substitutions.push(new NamedType(functionName.substring(0, lastColonIndex)));
 	}
-	const visitor = new FormatVisitor();
-	for (const param of templateParams) {
-		substitutions.push(param.accept(visitor));
-	}
-	return substitutions;
+
+    return [...substitutions, ...templateParams];
 }
 
 function skipReturnTypeIfNeeded(remaining, templateParams, substitutions) {
@@ -433,8 +430,7 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 		
 		if (typeNode) {
 			types.push(typeNode);
-			const visitor = new FormatVisitor();
-			substitutions.push(typeNode.accept(visitor));
+			substitutions.push(typeNode);
 			remaining = newRemaining;
 		} else {
 			// Skip unrecognized characters
@@ -532,17 +528,13 @@ function parseStdType(str, substitutions = []) {
 	};
 
 	if (str[0] === '_') {
-		const typeStr = substitutions[0] || '';
-		const typeNode = typeStr ? new NamedType(typeStr) : null;
-		return { typeNode, str: str.slice(1) };
+		return { typeNode: substitutions[0], str: str.slice(1) };
 	}
 
 	const subMatch = /^(\d+)_/.exec(str);
 	if (subMatch) {
 		const index = parseInt(subMatch[1], 10);
-		const typeStr = substitutions[index] || '';
-		const typeNode = typeStr ? new NamedType(typeStr) : null;
-		return { typeNode, str: str.slice(subMatch[0].length) };
+		return { typeNode: substitutions[index], str: str.slice(subMatch[0].length) };
 	}
 
 	if (str[0] === 't') {
@@ -703,7 +695,7 @@ const TYPE_PARSERS = [
 		parse: (ctx) => {
 			const { name, str } = parseEncodedName(ctx.char + ctx.remaining);
 			ctx.typeNode = new NamedType(name);
-			ctx.substitutions.push(name);
+			ctx.substitutions.push(ctx.typeNode);
 			return str;
 		}
 	}
