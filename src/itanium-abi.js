@@ -294,7 +294,6 @@ function parseFunctionSignature(str, substitutions = [], templateParams = []) {
 }
 
 class TypeVisitor {
-	visitBasicType(node) { throw new Error('visitBasicType not implemented'); }
 	visitNamedType(node) { throw new Error('visitNamedType not implemented'); }
 	visitQualifiedType(node) { throw new Error('visitQualifiedType not implemented'); }
 	visitPointerType(node) { throw new Error('visitPointerType not implemented'); }
@@ -306,10 +305,6 @@ class TypeVisitor {
 }
 
 class FormatVisitor extends TypeVisitor {
-	visitBasicType(node) {
-		return node.name;
-	}
-
 	visitNamedType(node) {
 		return node.name;
 	}
@@ -361,7 +356,7 @@ class FormatVisitor extends TypeVisitor {
 
 	formatParameterList(types) {
 		if (types.length === 0) return '';
-		if (types.length === 1 && types[0] instanceof BasicType && types[0].name === 'void') {
+		if (types.length === 1 && types[0] instanceof NamedType && types[0].name === 'void') {
 			return '';
 		}
 
@@ -493,17 +488,6 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 class TypeNode {
 	accept(visitor) {
 		throw new Error('accept() must be implemented by subclass');
-	}
-}
-
-class BasicType extends TypeNode {
-	constructor(name) {
-		super();
-		this.name = name;
-	}
-
-	accept(visitor) {
-		return visitor.visitBasicType(this);
 	}
 }
 
@@ -643,7 +627,7 @@ const TYPE_PARSERS = [
 		},
 		parse: function (ctx) {
 			const typeName = this.basicTypes[ctx.char];
-			ctx.typeNode = new BasicType(typeName);
+			ctx.typeNode = new NamedType(typeName);
 			return ctx.remaining;
 		}
 	},
