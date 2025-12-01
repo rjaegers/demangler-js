@@ -133,7 +133,7 @@ const SEGMENT_PARSERS = [
 		parse: (str) => ({ segment: getOperatorName(str.slice(0, 2)), remaining: str.slice(2) })
 	},
 	{
-		matches: (str) => /^(\d+)/.test(str),
+		matches: () => true,
 		parse: (str) => {
 			const { value, remaining } = parseLengthPrefixed(str);
 			const segment = value === '_GLOBAL__N_1' ? '(anonymous namespace)' : value;
@@ -145,13 +145,9 @@ const SEGMENT_PARSERS = [
 function parseNameSegment(str, className = '') {
 	for (const parser of SEGMENT_PARSERS) {
 		if (parser.matches(str)) {
-			return { ...parser.parse(str, { className }), isSpecial: true };
+			return { ...parser.parse(str, { className }) };
 		}
 	}
-	// Fallback length-prefixed parse (may hit if no parser matched)
-	const { value, remaining } = parseLengthPrefixed(str);
-	const segment = value === '_GLOBAL__N_1' ? '(anonymous namespace)' : value;
-	return { segment, remaining, isSpecial: false };
 }
 
 const isValidSegmentStart = (char) => /[\da-zCD]/.test(char);
@@ -503,7 +499,7 @@ const TYPE_PARSERS = [
 			'g': '__float128',
 			'z': '...'
 		},
-		matches: function (char, qualifiers) {
+		matches: function (char) {
 			return this.basicTypes[char] !== undefined;
 		},
 		parse: function (ctx) {
