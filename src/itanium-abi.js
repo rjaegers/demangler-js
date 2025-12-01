@@ -22,9 +22,8 @@ module.exports = {
 		let remaining = skipReturnTypeIfNeeded(afterTemplate, templateParams, substitutions);
 
 		const { types } = parseTypeList(remaining, substitutions, templateParams);
-		const visitor = new FormatVisitor();
 
-		return visitor.formatFunctionSignature(functionName, types, isConst);
+		return new FormatVisitor().formatFunctionSignature(functionName, types, isConst);
 	}
 };
 
@@ -164,15 +163,11 @@ class FormatVisitor extends TypeVisitor {
 	}
 
 	visitTemplateType(node) {
-		if (node.templateArgs.length === 0) {
-			return node.baseName;
-		}
 		const args = node.templateArgs.map(arg => arg.accept(this)).join(', ');
 		return `${node.baseName}<${args}>`;
 	}
 
 	formatParameterList(types) {
-		if (types.length === 0) return '';
 		if (types.length === 1 && types[0] instanceof NamedType && types[0].name === 'void') {
 			return '';
 		}
@@ -639,7 +634,7 @@ const TYPE_PARSERS = [
 		}
 	},
 	{
-		matches: (char, qualifiers) => char === 'F' && qualifiers.numPtr > 0,
+		matches: (char) => char === 'F',
 		parse: (ctx) => {
 			const result = parseFunctionType(ctx.remaining, ctx.substitutions, ctx.templateParams);
 			if (result.typeNode) {
@@ -708,7 +703,7 @@ function parseSingleType(encoding, substitutions = [], templateParams = []) {
 	const nextChar = remaining.slice(1);
 
 	for (const parser of TYPE_PARSERS) {
-		if (parser.matches(currentChar, qualifiers)) {
+		if (parser.matches(currentChar)) {
 			const ctx = {
 				char: currentChar,
 				remaining: nextChar,
