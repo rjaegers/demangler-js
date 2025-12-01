@@ -15,15 +15,18 @@ module.exports = {
 		const dotIndex = name.indexOf('.');
 		const encoding = dotIndex < 0 ? name.slice(2) : name.slice(2, dotIndex);
 
-		const { name: functionName, str: afterName, isConst = false } = parseEncodedName(encoding);
+		const { name: functionName, str: afterName, isConst = false, templateArgs = [] } = parseEncodedName(encoding);
 		const { templateParams, str: afterTemplate } = parseTemplatePlaceholders(afterName);
+		
+		// Use templateArgs from parseEncodedName if available, otherwise use templateParams
+		const allTemplateParams = templateArgs.length > 0 ? templateArgs : templateParams;
 
-		const substitutions = buildSubstitutions(functionName, templateParams);
-		let remaining = skipReturnTypeIfNeeded(afterTemplate, templateParams, substitutions);
+		const substitutions = buildSubstitutions(functionName, allTemplateParams);
+		const { returnType, remaining } = parseReturnTypeIfNeeded(afterTemplate, allTemplateParams, substitutions);
 
-		const { types } = parseTypeList(remaining, substitutions, templateParams);
+		const { types } = parseTypeList(remaining, substitutions, allTemplateParams);
 
-		return new FormatVisitor().formatFunctionSignature(functionName, types, isConst);
+		return new FormatVisitor().formatFunctionSignature(functionName, types, isConst, returnType);
 	}
 };
 
@@ -175,10 +178,11 @@ class FormatVisitor extends TypeVisitor {
 		return types.map(type => type.accept(this)).join(', ');
 	}
 
-	formatFunctionSignature(functionName, parameterTypes, isConst = false) {
+	formatFunctionSignature(functionName, parameterTypes, isConst = false, returnType = null) {
 		const parameterList = this.formatParameterList(parameterTypes);
 		const constQualifier = isConst ? ' const' : '';
-		return `${functionName}(${parameterList})${constQualifier}`;
+		const returnTypePart = returnType ? `${returnType.accept(this)} ` : '';
+		return `${returnTypePart}${functionName}(${parameterList})${constQualifier}`;
 	}
 }
 
@@ -192,12 +196,12 @@ function buildSubstitutions(functionName, templateParams) {
     return [...substitutions, ...templateParams];
 }
 
-function skipReturnTypeIfNeeded(remaining, templateParams, substitutions) {
+function parseReturnTypeIfNeeded(remaining, templateParams, substitutions) {
 	if (templateParams.length > 0 && remaining.length > 0) {
 		const result = parseSingleType(remaining, substitutions, templateParams);
-		return result.remaining;
+		return { returnType: result.typeNode, remaining: result.remaining };
 	}
-	return remaining;
+	return { returnType: null, remaining };
 }
 
 function parseLengthPrefixed(str) {
@@ -353,16 +357,16 @@ function parseNamespaceSegments(remaining, initialSegments = []) {
 function parseEncodedName(str) {
 	if (str[0] !== 'N') {
 		const { segment, remaining } = parseNameSegment(str);
-		if (!segment) return { name: '', str, isConst: false };
+		if (!segment) return { name: '', str, isConst: false, templateArgs: [] };
 
 		const { args, str: after } = parseTemplateArgs(remaining, []);
-		if (args && args.length > 0 && /\d/.test(remaining[1])) {
+		if (args && args.length > 0) {
 			const templateType = new TemplateType(segment, args);
 			const visitor = new FormatVisitor();
-			return { name: templateType.accept(visitor), str: after, isConst: false };
+			return { name: templateType.accept(visitor), str: after, isConst: false, templateArgs: args };
 		}
 
-		return { name: segment, str: remaining, isConst: false };
+		return { name: segment, str: remaining, isConst: false, templateArgs: [] };
 	}
 
 	let remaining = str.slice(1);
@@ -370,7 +374,7 @@ function parseEncodedName(str) {
 	const { segments: stdSegments, remaining: afterStd } = parseStdPrefix(str, afterConst);
 	const { segments, remaining: afterSegments } = parseNamespaceSegments(afterStd, stdSegments);
 	const finalRemaining = afterSegments[0] === 'E' ? afterSegments.slice(1) : afterSegments;
-	return { name: segments.join('::'), str: finalRemaining, isConst };
+	return { name: segments.join('::'), str: finalRemaining, isConst, templateArgs: [] };
 }
 
 function parseTemplateArgs(str, substitutions = []) {

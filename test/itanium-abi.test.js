@@ -675,12 +675,12 @@ describe('static and const qualifiers', () => {
 
 describe('template functions', () => {
 	it('handles simple template function', (done) => {
-		assert.equal(itanium_abi.demangle("_Z3maxIiET_S0_S0_"), "max(int, int)");
+		assert.equal(itanium_abi.demangle("_Z3maxIiET_S0_S0_"), "int max<int>(int, int)");
 		done();
 	});
 
 	it('handles template with multiple types', (done) => {
-		assert.equal(itanium_abi.demangle("_Z4swapIiEvRT_S1_"), "swap(int&, int&)");
+		assert.equal(itanium_abi.demangle("_Z4swapIiEvRT_S1_"), "void swap<int>(int&, int&)");
 		done();
 	});
 
@@ -864,7 +864,7 @@ describe('error handling and edge cases', () => {
 
 	it('handles parseTemplateIfPresent with non-digit after I', (done) => {
 		// Tests early return in parseTemplateIfPresent when next char is not a digit
-		assert.equal(itanium_abi.demangle("_Z3fooIiE"), "foo()");
+		assert.equal(itanium_abi.demangle("_Z3fooIiE"), "foo<int>()");
 		done();
 	});
 
@@ -877,6 +877,16 @@ describe('error handling and edge cases', () => {
 	it('handles parseStdType with digit (std:: custom)', (done) => {
 		// Tests parseStdType when firstChar is a digit
 		assert.equal(itanium_abi.demangle("_Z3fooS6vector"), "foo(std::vector)");
+		done();
+	});
+
+	it('explicitly encodes return type for template functions taking parameters', (done) => {
+		assert.equal(itanium_abi.demangle("_Z5firstI3DuoEvS0_"), "void first<Duo>(Duo)");
+		done();
+	});
+
+	it('explicitly encodes return type for template functions with no parameters', (done) => {
+		assert.equal(itanium_abi.demangle("_Z3fooIiPFidEiEvv"), "void foo<int, int (*)(double), int>()");
 		done();
 	});
 });
