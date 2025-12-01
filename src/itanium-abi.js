@@ -43,7 +43,7 @@ function buildSubstitutions(functionName, templateParams) {
 
 function skipReturnTypeIfNeeded(remaining, templateParams, substitutions) {
 	if (templateParams.length > 0 && remaining.length > 0) {
-		const result = parseTypeHelper(remaining, substitutions, templateParams);
+		const result = parseSingleType(remaining, substitutions, templateParams);
 		return result.remaining;
 	}
 	return remaining;
@@ -240,7 +240,7 @@ function parseTemplateArgs(str, substitutions = []) {
 	} else {
 		const tempSubs = [...substitutions];
 		while (remaining.length > 0 && remaining[0] !== 'E') {
-			const { typeNode, remaining: after } = parseTypeHelper(remaining, tempSubs, []);
+			const { typeNode, remaining: after } = parseSingleType(remaining, tempSubs, []);
 			if (!typeNode) break;
 			args.push(typeNode);
 			remaining = after;
@@ -251,15 +251,11 @@ function parseTemplateArgs(str, substitutions = []) {
 	return { args, str: remaining };
 }
 
-const parseTypeHelper = (str, substitutions = [], templateParams = []) => {
-	return parseSingleType(str, substitutions, templateParams);
-}
-
 function parseArrayType(str, substitutions = [], templateParams = []) {
 	const sizeMatch = /^(\d+)_/.exec(str);
 	if (!sizeMatch) return { typeNode: null, str };
 
-	const { typeNode: innerType, remaining } = parseTypeHelper(str.slice(sizeMatch[0].length), substitutions, templateParams);
+	const { typeNode: innerType, remaining } = parseSingleType(str.slice(sizeMatch[0].length), substitutions, templateParams);
 	if (!innerType) return { typeNode: null, str };
 
 	// Extract dimensions from nested arrays
@@ -277,14 +273,14 @@ function parseArrayType(str, substitutions = [], templateParams = []) {
 }
 
 function parseFunctionSignature(str, substitutions = [], templateParams = []) {
-	const { typeNode: returnType, remaining: afterReturn } = parseTypeHelper(str, substitutions, templateParams);
+	const { typeNode: returnType, remaining: afterReturn } = parseSingleType(str, substitutions, templateParams);
 	if (!returnType) return { returnType: null, params: [], remaining: str };
 
 	const params = [];
 	let remaining = afterReturn;
 
 	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { typeNode, remaining: afterParam } = parseTypeHelper(remaining, substitutions, templateParams);
+		const { typeNode, remaining: afterParam } = parseSingleType(remaining, substitutions, templateParams);
 		if (typeNode) params.push(typeNode);
 		remaining = afterParam;
 	}
@@ -378,7 +374,7 @@ function parseFunctionType(str, substitutions = [], templateParams = []) {
 }
 
 function parseMemberFunctionPointer(str, substitutions = [], templateParams = []) {
-	const { typeNode: classType, remaining: afterClass } = parseTypeHelper(str, substitutions, templateParams);
+	const { typeNode: classType, remaining: afterClass } = parseSingleType(str, substitutions, templateParams);
 	if (!classType) return { typeNode: null, str };
 
 	let remaining = afterClass;
@@ -461,7 +457,7 @@ function parseTemplatePlaceholders(str) {
 	let remaining = str.slice(1);
 
 	while (remaining.length > 0 && remaining[0] !== 'E') {
-		const { typeNode, remaining: newRemaining } = parseTypeHelper(remaining, [], []);
+		const { typeNode, remaining: newRemaining } = parseSingleType(remaining, [], []);
 		if (typeNode) templateParams.push(typeNode);
 		remaining = newRemaining;
 	}
@@ -474,8 +470,8 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 	let remaining = encoding;
 
 	while (remaining.length > 0) {
-		const { typeNode, remaining: newRemaining } = parseTypeHelper(remaining, substitutions, templateParams);
-
+		const { typeNode, remaining: newRemaining } = parseSingleType(remaining, substitutions, templateParams);
+		
 		if (typeNode) {
 			types.push(typeNode);
 			const visitor = new FormatVisitor();
@@ -485,9 +481,7 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 			// Skip unrecognized characters
 			remaining = remaining.slice(1);
 		}
-	}
-
-	return { types };
+	}	return { types };
 }
 
 class TypeNode {
