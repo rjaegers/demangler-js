@@ -23,9 +23,8 @@ module.exports = {
 
 		const { types } = parseTypeList(remaining, substitutions, templateParams);
 		const visitor = new FormatVisitor();
-		const parameterList = visitor.formatParameterList(types);
 
-		return `${functionName}(${parameterList})${isConst ? ' const' : ''}`;
+		return visitor.formatFunctionSignature(functionName, types, isConst);
 	}
 };
 
@@ -361,6 +360,12 @@ class FormatVisitor extends TypeVisitor {
 		}
 
 		return types.map(type => type.accept(this)).join(', ');
+	}
+
+	formatFunctionSignature(functionName, parameterTypes, isConst = false) {
+		const parameterList = this.formatParameterList(parameterTypes);
+		const constQualifier = isConst ? ' const' : '';
+		return `${functionName}(${parameterList})${constQualifier}`;
 	}
 }
 
