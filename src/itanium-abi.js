@@ -193,7 +193,8 @@ class FormatVisitor extends TypeVisitor {
 	}
 
 	formatParameterList(types) {
-		if (types.length === 1 && types[0] instanceof NamedType && types[0].name === 'void') {
+		// Render as empty when there is only a single 'void' parameter
+		if (types.length === 1 && types[0].accept(this) === 'void') {
 			return '';
 		}
 
@@ -504,10 +505,15 @@ function parseArrayType(str, substitutions = [], templateParams = []) {
 	const dimensions = [sizeMatch[1]];
 	let elementType = innerType;
 
-	// If the inner type is already an ArrayType, flatten the dimensions
-	if (innerType instanceof ArrayType) {
-		dimensions.push(...innerType.dimensions);
-		elementType = innerType.elementType;
+	// If the inner type is an ArrayType (possibly wrapped in QualifiedType), flatten the dimensions
+	let actualInnerType = innerType;
+	if (innerType instanceof QualifiedType) {
+		actualInnerType = innerType.baseType;
+	}
+	
+	if (actualInnerType instanceof ArrayType) {
+		dimensions.push(...actualInnerType.dimensions);
+		elementType = actualInnerType.elementType;
 	}
 
 	const typeNode = new ArrayType(elementType, dimensions);
@@ -648,14 +654,6 @@ function parseQualifiers(str) {
 	return { qualifiers, remaining };
 }
 
-function applyQualifiers(baseType, qualifiers) {
-	if (qualifiers.isConst || qualifiers.isVolatile || qualifiers.isRestrict ||
-		qualifiers.numPtr > 0 || qualifiers.isRef || qualifiers.isRValueRef) {
-		return new QualifiedType(baseType, qualifiers);
-	}
-	return baseType;
-}
-
 const TYPE_PARSERS = [
 	{
 		basicTypes: {
@@ -686,108 +684,106 @@ const TYPE_PARSERS = [
 		},
 		parse: function (ctx) {
 			const typeName = this.basicTypes[ctx.char];
-			ctx.typeNode = new NamedType(typeName);
-			return ctx.remaining;
+			const baseType = new NamedType(typeName);
+			const typeNode = new QualifiedType(baseType, ctx.qualifiers);
+			return { typeNode, remaining: ctx.remaining };
 		}
 	},
 	{
 		matches: (char) => char === 'A',
 		parse: (ctx) => {
 			const result = parseArrayType(ctx.remaining, ctx.substitutions, ctx.templateParams);
-			if (result.typeNode) {
-				ctx.typeNode = result.typeNode;
-				return result.str;
-			}
-			return null;
+			const typeNode = result.typeNode ? new QualifiedType(result.typeNode, ctx.qualifiers) : null;
+			return { typeNode, remaining: result.str };
 		}
 	},
 	{
 		matches: (char) => char === 'F',
 		parse: (ctx) => {
 			const result = parseFunctionType(ctx.remaining, ctx.substitutions, ctx.templateParams);
+			let typeNode = null;
 			if (result.typeNode) {
-				ctx.typeNode = result.typeNode;
-				ctx.qualifiers.numPtr = 0;  // Function pointer notation already includes the pointer
-				return result.str;
+				// Function pointer notation already includes the pointer semantics
+				const adjustedQualifiers = { ...ctx.qualifiers, numPtr: 0 };
+				typeNode = new QualifiedType(result.typeNode, adjustedQualifiers);
 			}
-			return null;
+			return { typeNode, remaining: result.str };
 		}
 	},
 	{
 		matches: (char) => char === 'M',
 		parse: (ctx) => {
 			const result = parseMemberFunctionPointer(ctx.remaining, ctx.substitutions, ctx.templateParams);
+			let typeNode = null;
 			if (result.typeNode) {
-				ctx.typeNode = result.typeNode;
-				ctx.qualifiers.numPtr = 0;  // Member pointer notation already includes the pointer
-				return result.str;
+				// Member pointer notation already includes the pointer semantics
+				const adjustedQualifiers = { ...ctx.qualifiers, numPtr: 0 };
+				typeNode = new QualifiedType(result.typeNode, adjustedQualifiers);
 			}
-			return null;
+			return { typeNode, remaining: result.str };
 		}
 	},
 	{
 		matches: (char) => char === 'T',
 		parse: (ctx) => {
 			const result = parseTemplateParam(ctx.remaining, ctx.templateParams);
-			if (result.typeNode) {
-				ctx.typeNode = result.typeNode;
-				return result.str;
-			}
-			return null;
+			const typeNode = result.typeNode ? new QualifiedType(result.typeNode, ctx.qualifiers) : null;
+			return { typeNode, remaining: result.str };
 		}
 	},
 	{
 		matches: (char) => char === 'S',
 		parse: (ctx) => {
 			const result = parseStdType(ctx.remaining, ctx.substitutions);
-			if (!result.typeNode) return null;
+			if (!result.typeNode) {
+				return { typeNode: null, remaining: result.str };
+			}
 
 			const { args, str } = parseTemplateArgs(result.str, ctx.substitutions);
+			let baseType;
 			if (args && args.length > 0) {
 				const visitor = new FormatVisitor();
 				const baseName = result.typeNode.accept(visitor);
-				ctx.typeNode = new TemplateType(baseName, args);
+				baseType = new TemplateType(baseName, args);
 			} else {
-				ctx.typeNode = result.typeNode;
+				baseType = result.typeNode;
 			}
-
-			return str;
+			const typeNode = new QualifiedType(baseType, ctx.qualifiers);
+			return { typeNode, remaining: str };
 		}
 	},
 	{
 		matches: (char) => !isNaN(parseInt(char, 10)) || char === 'N',
 		parse: (ctx) => {
 			const { name, str } = parseEncodedName(ctx.char + ctx.remaining);
-			ctx.typeNode = new NamedType(name);
-			ctx.substitutions.push(ctx.typeNode);
-			return str;
+			const baseType = new NamedType(name);
+			const typeNode = new QualifiedType(baseType, ctx.qualifiers);
+			ctx.substitutions.push(typeNode);
+			return { typeNode, remaining: str };
 		}
+	},
+	{
+		matches: () => true,
+		parse: (ctx) => ({ typeNode: null, remaining: ctx.remaining })
 	}
 ];
 
 function parseSingleType(encoding, substitutions = [], templateParams = []) {
 	const { qualifiers, remaining } = parseQualifiers(encoding);
-
 	const currentChar = remaining[0];
-	const nextChar = remaining.slice(1);
+	const remainder = remaining.slice(1);
 
 	for (const parser of TYPE_PARSERS) {
 		if (parser.matches(currentChar)) {
 			const ctx = {
 				char: currentChar,
-				remaining: nextChar,
-				typeNode: null,
+				remaining: remainder,
 				qualifiers,
 				substitutions,
 				templateParams
 			};
-			const result = parser.parse(ctx);
-			if (result !== null && ctx.typeNode) {
-				const typeNode = applyQualifiers(ctx.typeNode, qualifiers);
-				return { typeNode, remaining: result };
-			}
+
+			return parser.parse(ctx);
 		}
 	}
-
-	return { typeNode: null, remaining: nextChar };
 }
