@@ -353,13 +353,13 @@ describe('variadic functions', () => {
 
 describe('multiple parameters', () => {
 	it('receives multiple types mixed', (done) => {
-		assert.equal(itanium_abi.demangle("_Z11mixedParamsibfdPKc"), 
+		assert.equal(itanium_abi.demangle("_Z11mixedParamsibfdPKc"),
 			"mixedParams(int, bool, float, double, const char*)");
 		done();
 	});
 
 	it('receives pointers and references mixed', (done) => {
-		assert.equal(itanium_abi.demangle("_Z9mixedModsPiRiOi"), 
+		assert.equal(itanium_abi.demangle("_Z9mixedModsPiRiOi"),
 			"mixedMods(int*, int&, int&&)");
 		done();
 	});
@@ -367,13 +367,13 @@ describe('multiple parameters', () => {
 
 describe('nested namespaces', () => {
 	it('handles deeply nested namespaces', (done) => {
-		assert.equal(itanium_abi.demangle("_ZN5outer5inner4deep8functionEv"), 
+		assert.equal(itanium_abi.demangle("_ZN5outer5inner4deep8functionEv"),
 			"outer::inner::deep::function()");
 		done();
 	});
 
 	it('handles namespace with custom type', (done) => {
-		assert.equal(itanium_abi.demangle("_ZN2ns8functionEN4data6customE"), 
+		assert.equal(itanium_abi.demangle("_ZN2ns8functionEN4data6customE"),
 			"ns::function(data::custom)");
 		done();
 	});
@@ -753,7 +753,7 @@ describe('edge cases', () => {
 	});
 
 	it('handles very long names', (done) => {
-		assert.equal(itanium_abi.demangle("_Z49thisIsAVeryLongFunctionNameWithManyCharactersInItv"), 
+		assert.equal(itanium_abi.demangle("_Z49thisIsAVeryLongFunctionNameWithManyCharactersInItv"),
 			"thisIsAVeryLongFunctionNameWithManyCharactersInIt()");
 		done();
 	});

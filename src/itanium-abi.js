@@ -152,7 +152,7 @@ class FormatVisitor extends TypeVisitor {
 
 		result += node.baseType.accept(this);
 
-        result += '*'.repeat(node.numPtr);
+		result += '*'.repeat(node.numPtr);
 
 		if (node.isRestrict) result += ' restrict';
 		if (node.isRef) result += '&';
@@ -219,10 +219,10 @@ function parseVendorPostfix(name) {
 
 function parseSpecialName(encoding) {
 	if (encoding.length < 2) return null;
-	
+
 	const prefix = encoding.slice(0, 2);
 	const remaining = encoding.slice(2);
-	
+
 	const specialNames = {
 		'TI': 'typeinfo for ',
 		'TS': 'typeinfo name for ',
@@ -233,10 +233,10 @@ function parseSpecialName(encoding) {
 		'TH': 'TLS init function for ',
 		'TW': 'TLS wrapper function for '
 	};
-	
+
 	const specialPrefix = specialNames[prefix];
 	if (!specialPrefix) return null;
-	
+
 	const { name: typeName } = parseEncodedName(remaining);
 	return `${specialPrefix}${typeName}`;
 }
@@ -248,7 +248,7 @@ function buildSubstitutions(functionName, templateParams) {
 		substitutions.push(new NamedType(functionName.substring(0, lastColonIndex)));
 	}
 
-    return [...substitutions, ...templateParams];
+	return [...substitutions, ...templateParams];
 }
 
 function parseReturnTypeIfNeeded(remaining, templateParams, substitutions) {
@@ -481,7 +481,7 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 
 	while (remaining.length > 0) {
 		const { typeNode, remaining: newRemaining } = parseSingleType(remaining, substitutions, templateParams);
-		
+
 		if (typeNode) {
 			types.push(typeNode);
 			substitutions.push(typeNode);
@@ -490,7 +490,7 @@ function parseTypeList(encoding, substitutions = [], templateParams = []) {
 			// Skip unrecognized characters
 			remaining = remaining.slice(1);
 		}
-	}	return { types };
+	} return { types };
 }
 
 function parseArrayType(str, substitutions = [], templateParams = []) {
