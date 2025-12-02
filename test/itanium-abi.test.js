@@ -895,3 +895,65 @@ describe('error handling and edge cases', () => {
 		done();
 	});
 });
+
+describe('special names (typeinfo, vtable, etc.)', () => {
+	it('handles typeinfo (TI)', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTI7MyClass"), "typeinfo for MyClass");
+		done();
+	});
+
+	it('handles typeinfo name (TS)', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTS7MyClass"), "typeinfo name for MyClass");
+		done();
+	});
+
+	it('handles vtable (TV)', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTV7MyClass"), "vtable for MyClass");
+		done();
+	});
+
+	it('handles VTT (TT)', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTT7MyClass"), "VTT for MyClass");
+		done();
+	});
+
+	it('handles construction vtable (TC)', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTC7MyClass"), "construction vtable for MyClass");
+		done();
+	});
+
+	it('handles guard variable (GV)', (done) => {
+		assert.equal(itanium_abi.demangle("_ZGVN7MyClass10staticDataE"), "guard variable for MyClass::staticData");
+		done();
+	});
+
+	it('handles TLS init function (TH)', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTH7MyClass"), "TLS init function for MyClass");
+		done();
+	});
+
+	it('handles TLS wrapper function (TW)', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTW7MyClass"), "TLS wrapper function for MyClass");
+		done();
+	});
+
+	it('handles typeinfo for namespaced class', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTIN3std6vectorE"), "typeinfo for std::vector");
+		done();
+	});
+
+	it('handles vtable for nested class', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTVN5outer5inner5ClassE"), "vtable for outer::inner::Class");
+		done();
+	});
+
+	it('handles typeinfo name for complex type', (done) => {
+		assert.equal(itanium_abi.demangle("_ZTSN11myNamespace12MyCustomTypeE"), "typeinfo name for myNamespace::MyCustomType");
+		done();
+	});
+
+	it('handles guard variable for namespaced static', (done) => {
+		assert.equal(itanium_abi.demangle("_ZGVN4test10staticDataE"), "guard variable for test::staticData");
+		done();
+	});
+});

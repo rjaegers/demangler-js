@@ -12,13 +12,16 @@ module.exports = {
 	demangle: function (name) {
 		if (!this.isMangled(name)) return name;
 
-		const dotIndex = name.indexOf('.');
-		const encoding = dotIndex < 0 ? name.slice(2) : name.slice(2, dotIndex);
+		const { remaining: afterVendorPostfix } = parseVendorPostfix(name.slice(2));
 
-		const { name: functionName, str: afterName, isConst = false, templateArgs = [] } = parseEncodedName(encoding);
+		if (afterVendorPostfix[0] === 'T' || afterVendorPostfix[0] === 'G') {
+			const specialResult = parseSpecialName(afterVendorPostfix);
+			if (specialResult) return specialResult;
+		}
+
+		const { name: functionName, str: afterName, isConst = false, templateArgs = [] } = parseEncodedName(afterVendorPostfix);
 		const { templateParams, str: afterTemplate } = parseTemplatePlaceholders(afterName);
-		
-		// Use templateArgs from parseEncodedName if available, otherwise use templateParams
+
 		const allTemplateParams = templateArgs.length > 0 ? templateArgs : templateParams;
 
 		const substitutions = buildSubstitutions(functionName, allTemplateParams);
@@ -203,6 +206,39 @@ class FormatVisitor extends TypeVisitor {
 		const returnTypePart = returnType ? `${returnType.accept(this)} ` : '';
 		return `${returnTypePart}${functionName}(${parameterList})${constQualifier}`;
 	}
+}
+
+function parseVendorPostfix(name) {
+	const dotIndex = name.indexOf('.');
+
+	if (dotIndex < 0)
+		return { remaining: name, vendorPostfix: null };
+
+	return { remaining: name.slice(0, dotIndex), vendorPostfix: name.slice(dotIndex) };
+}
+
+function parseSpecialName(encoding) {
+	if (encoding.length < 2) return null;
+	
+	const prefix = encoding.slice(0, 2);
+	const remaining = encoding.slice(2);
+	
+	const specialNames = {
+		'TI': 'typeinfo for ',
+		'TS': 'typeinfo name for ',
+		'TV': 'vtable for ',
+		'TT': 'VTT for ',
+		'TC': 'construction vtable for ',
+		'GV': 'guard variable for ',
+		'TH': 'TLS init function for ',
+		'TW': 'TLS wrapper function for '
+	};
+	
+	const specialPrefix = specialNames[prefix];
+	if (!specialPrefix) return null;
+	
+	const { name: typeName } = parseEncodedName(remaining);
+	return `${specialPrefix}${typeName}`;
 }
 
 function buildSubstitutions(functionName, templateParams) {
