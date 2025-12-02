@@ -151,8 +151,7 @@ class FormatVisitor extends TypeVisitor {
 		if (node.isVolatile) result += 'volatile ';
 
 		result += node.baseType.accept(this);
-
-		result += '*'.repeat(node.numPtr);
+		result += this.formatPointers(node, result);
 
 		if (node.isRestrict) result += ' restrict';
 		if (node.isRef) result += '&';
@@ -190,6 +189,19 @@ class FormatVisitor extends TypeVisitor {
 	visitTemplateType(node) {
 		const args = node.templateArgs.map(arg => arg.accept(this)).join(', ');
 		return `${node.baseName}<${args}>`;
+	}
+
+	formatPointers(node) {
+		// Function/member pointers have special syntax with * in the middle
+		const isFunctionPointer = node.baseType instanceof FunctionPointerType ||
+			node.baseType instanceof MemberFunctionPointerType ||
+			node.baseType instanceof MemberPointerType;
+
+		if (isFunctionPointer) {
+				return '';
+		}
+
+		return '*'.repeat(node.numPtr);
 	}
 
 	formatParameterList(types) {
@@ -510,7 +522,7 @@ function parseArrayType(str, substitutions = [], templateParams = []) {
 	if (innerType instanceof QualifiedType) {
 		actualInnerType = innerType.baseType;
 	}
-	
+
 	if (actualInnerType instanceof ArrayType) {
 		dimensions.push(...actualInnerType.dimensions);
 		elementType = actualInnerType.elementType;
@@ -701,12 +713,7 @@ const TYPE_PARSERS = [
 		matches: (char) => char === 'F',
 		parse: (ctx) => {
 			const result = parseFunctionType(ctx.remaining, ctx.substitutions, ctx.templateParams);
-			let typeNode = null;
-			if (result.typeNode) {
-				// Function pointer notation already includes the pointer semantics
-				const adjustedQualifiers = { ...ctx.qualifiers, numPtr: 0 };
-				typeNode = new QualifiedType(result.typeNode, adjustedQualifiers);
-			}
+			const typeNode = result.typeNode ? new QualifiedType(result.typeNode, ctx.qualifiers) : null;
 			return { typeNode, remaining: result.str };
 		}
 	},
@@ -714,12 +721,7 @@ const TYPE_PARSERS = [
 		matches: (char) => char === 'M',
 		parse: (ctx) => {
 			const result = parseMemberFunctionPointer(ctx.remaining, ctx.substitutions, ctx.templateParams);
-			let typeNode = null;
-			if (result.typeNode) {
-				// Member pointer notation already includes the pointer semantics
-				const adjustedQualifiers = { ...ctx.qualifiers, numPtr: 0 };
-				typeNode = new QualifiedType(result.typeNode, adjustedQualifiers);
-			}
+			const typeNode = result.typeNode ? new QualifiedType(result.typeNode, ctx.qualifiers) : null;
 			return { typeNode, remaining: result.str };
 		}
 	},
