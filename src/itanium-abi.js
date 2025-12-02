@@ -198,7 +198,7 @@ class FormatVisitor extends TypeVisitor {
 			node.baseType instanceof MemberPointerType;
 
 		if (isFunctionPointer) {
-				return '';
+			return '';
 		}
 
 		return '*'.repeat(node.numPtr);
@@ -445,32 +445,29 @@ function parseEncodedName(str) {
 	return { name: segments.join('::'), str: finalRemaining, isConst, templateArgs: [] };
 }
 
+function parseArgsUntil(remaining, endChar, parseArgFn) {
+	const args = [];
+	while (remaining.length > 0 && remaining[0] !== endChar) {
+		const { typeNode, remaining: after } = parseArgFn(remaining);
+		if (!typeNode) break;
+		args.push(typeNode);
+		remaining = after;
+	}
+	return { args, str: remaining[0] === endChar ? remaining.slice(1) : remaining };
+}
+
 function parseTemplateArgs(str, substitutions = []) {
 	if (str[0] !== 'I') return { args: null, str };
 
 	const isLengthPrefixed = str[1] && /\d/.test(str[1]);
-	let remaining = str.slice(1);
-	const args = [];
-
-	if (isLengthPrefixed) {
-		while (remaining.length > 0 && remaining[0] !== 'E') {
+	const parseArgFn = isLengthPrefixed
+		? (remaining) => {
 			const { value, remaining: after } = parseLengthPrefixed(remaining);
-			if (!value) break;
-			args.push(new NamedType(value));
-			remaining = after;
+			return { typeNode: value ? new NamedType(value) : null, remaining: after };
 		}
-	} else {
-		const tempSubs = [...substitutions];
-		while (remaining.length > 0 && remaining[0] !== 'E') {
-			const { typeNode, remaining: after } = parseSingleType(remaining, tempSubs, []);
-			if (!typeNode) break;
-			args.push(typeNode);
-			remaining = after;
-		}
-	}
+		: (remaining) => parseSingleType(remaining, substitutions, []);
 
-	if (remaining[0] === 'E') remaining = remaining.slice(1);
-	return { args, str: remaining };
+	return parseArgsUntil(str.slice(1), 'E', parseArgFn);
 }
 
 function parseTemplatePlaceholders(str) {
