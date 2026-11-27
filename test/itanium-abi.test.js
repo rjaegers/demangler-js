@@ -666,6 +666,14 @@ describe('const member functions', () => {
 	});
 });
 
+describe('conversion operators', () => {
+	it('includes the conversion target type in the operator name', (done) => {
+		assert.equal(itanium_abi.demangle("_ZNK11ConvertiblecviEv"),
+			"Convertible::operator int() const");
+		done();
+	});
+});
+
 describe('static and const qualifiers', () => {
 	it('handles pointer to pointer to const', (done) => {
 		assert.equal(itanium_abi.demangle("_Z8testPtrsPPKi"), "testPtrs(const int**)");
@@ -679,8 +687,24 @@ describe('template functions', () => {
 		done();
 	});
 
+	it('handles a named and builtin template argument together', (done) => {
+		assert.equal(itanium_abi.demangle("_Z3fooI3BariEvv"), "void foo<Bar, int>()");
+		done();
+	});
+
+	it('handles a namespaced template function', (done) => {
+		assert.equal(itanium_abi.demangle("_ZN2ns3fooIiEEvT_S1_"),
+			"void ns::foo<int>(int, int)");
+		done();
+	});
+
 	it('handles template with multiple types', (done) => {
 		assert.equal(itanium_abi.demangle("_Z4swapIiEvRT_S1_"), "void swap<int>(int&, int&)");
+		done();
+	});
+
+	it('handles references to the second template parameter', (done) => {
+		assert.equal(itanium_abi.demangle("_Z3barI1A1BEvT_T0_"), "void bar<A, B>(A, B)");
 		done();
 	});
 
@@ -717,6 +741,18 @@ describe('function pointers', () => {
 describe('complex substitutions', () => {
 	it('handles multiple back-references', (done) => {
 		assert.equal(itanium_abi.demangle("_Z8functionN3foo3barES0_S0_"), "function(foo::bar, foo::bar, foo::bar)");
+		done();
+	});
+
+	it('handles substitutions for nested type prefixes', (done) => {
+		assert.equal(itanium_abi.demangle("_Z8repeatedPN3foo1AEPNS_1BES1_S3_"),
+			"repeated(foo::A*, foo::B*, foo::A*, foo::B*)");
+		done();
+	});
+
+	it('handles substitutions for template specializations', (done) => {
+		assert.equal(itanium_abi.demangle("_Z18repeated_templatesPN2ns1AIiEES2_PNS_1BIiEE"),
+			"repeated_templates(ns::A<int>*, ns::A<int>*, ns::B<int>*)");
 		done();
 	});
 
@@ -891,6 +927,11 @@ describe('error handling and edge cases', () => {
 	});
 
 	it('handles pointers to member data', (done) => {
+		assert.equal(itanium_abi.demangle("_Z6memberM2ABi"), "member(int AB::*)");
+		done();
+	});
+
+	it('handles pointer to pointer to member data', (done) => {
 		assert.equal(itanium_abi.demangle("_Z3fooPM2ABi"), "foo(int AB::**)");
 		done();
 	});
