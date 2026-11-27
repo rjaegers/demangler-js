@@ -183,7 +183,7 @@ class FormatVisitor extends TypeVisitor {
 	visitMemberPointerType(node) {
 		const memberTypeStr = node.memberType.accept(this);
 		const classTypeStr = node.classType.accept(this);
-		return `${memberTypeStr} ${classTypeStr}::**`;
+		return `${memberTypeStr} ${classTypeStr}::*`;
 	}
 
 	visitTemplateType(node) {
@@ -192,10 +192,13 @@ class FormatVisitor extends TypeVisitor {
 	}
 
 	formatPointers(node) {
+		if (node.baseType instanceof MemberPointerType) {
+			return '*'.repeat(node.numPtr);
+		}
+
 		// Function/member pointers have special syntax with * in the middle
 		const isFunctionPointer = node.baseType instanceof FunctionPointerType ||
-			node.baseType instanceof MemberFunctionPointerType ||
-			node.baseType instanceof MemberPointerType;
+			node.baseType instanceof MemberFunctionPointerType;
 
 		if (isFunctionPointer) {
 			return '';
@@ -259,6 +262,10 @@ function buildSubstitutions(functionName, templateParams) {
 	if (functionName.includes('::')) {
 		const lastColonIndex = functionName.lastIndexOf('::');
 		substitutions.push(new NamedType(functionName.substring(0, lastColonIndex)));
+	}
+
+	if (templateParams.length > 0) {
+		substitutions.push(new NamedType(functionName));
 	}
 
 	return [...substitutions, ...templateParams];
@@ -366,7 +373,24 @@ const SEGMENT_PARSERS = [
 	}
 ];
 
-function parseNameSegment(str, className = '') {
+function parseNameSegment(str, className = '', substitutions = []) {
+	if (str[0] === 'S') {
+		const { typeNode, str: remaining } = parseStdType(str.slice(1), substitutions);
+		if (typeNode) {
+			return {
+				segment: typeNode.accept(new FormatVisitor()),
+				remaining,
+				isSubstitution: true
+			};
+		}
+	}
+
+	if (str.startsWith('cv')) {
+		const { typeNode, remaining } = parseSingleType(str.slice(2), substitutions, []);
+		const targetType = typeNode ? typeNode.accept(new FormatVisitor()) : '';
+		return { segment: `operator ${targetType}`, remaining };
+	}
+
 	for (const parser of SEGMENT_PARSERS) {
 		if (parser.matches(str)) {
 			return { ...parser.parse(str, { className }) };
@@ -374,7 +398,7 @@ function parseNameSegment(str, className = '') {
 	}
 }
 
-const isValidSegmentStart = (char) => /[\da-zCD]/.test(char);
+const isValidSegmentStart = (char) => /[\da-zCDS]/.test(char);
 const isNamespaceTerminator = (char) => char === 'E' || char === 'I';
 
 function getCurrentClassName(segments) {
@@ -393,41 +417,57 @@ function parseStdPrefix(originalStr, remaining) {
 		: { segments: [], remaining };
 }
 
-function parseSegmentWithTemplate(remaining, className) {
-	const { segment, remaining: afterSegment } = parseNameSegment(remaining, className);
+function parseSegmentWithTemplate(remaining, className, substitutions, prefixSegments) {
+	const { segment, remaining: afterSegment, isSubstitution } =
+		parseNameSegment(remaining, className, substitutions);
 	if (!segment) return { segment: null, remaining };
 
-	const { args, str } = parseTemplateArgs(afterSegment, []);
-	if (!args) return { segment, remaining: afterSegment };
+	if (afterSegment[0] === 'I' && !isSubstitution) {
+		substitutions.push(new NamedType([...prefixSegments, segment].join('::')));
+	}
+
+	const { args, str } = parseTemplateArgs(afterSegment, substitutions);
+	if (!args) return { segment, remaining: afterSegment, isSubstitution, templateArgs: [] };
 
 	const templateType = new TemplateType(segment, args);
 	const visitor = new FormatVisitor();
-	return { segment: templateType.accept(visitor), remaining: str };
+	return {
+		segment: templateType.accept(visitor),
+		remaining: str,
+		isSubstitution: false,
+		templateArgs: args
+	};
 }
 
-function parseNamespaceSegments(remaining, initialSegments = []) {
+function parseNamespaceSegments(remaining, initialSegments = [], substitutions = []) {
 	const segments = [...initialSegments];
+	let templateArgs = [];
 
 	while (remaining.length > 0) {
 		if (isNamespaceTerminator(remaining[0]) || !isValidSegmentStart(remaining[0])) break;
 
 		const className = getCurrentClassName(segments);
-		const { segment, remaining: newRemaining } = parseSegmentWithTemplate(remaining, className);
+		const { segment, remaining: newRemaining, isSubstitution, templateArgs: segmentTemplateArgs } =
+			parseSegmentWithTemplate(remaining, className, substitutions, segments);
 		if (!segment) break;
 
 		segments.push(segment);
+		templateArgs = segmentTemplateArgs;
+		if (!isSubstitution) {
+			substitutions.push(new NamedType(segments.join('::')));
+		}
 		remaining = newRemaining;
 	}
 
-	return { segments, remaining };
+	return { segments, remaining, templateArgs };
 }
 
-function parseEncodedName(str) {
+function parseEncodedName(str, substitutions = []) {
 	if (str[0] !== 'N') {
-		const { segment, remaining } = parseNameSegment(str);
+		const { segment, remaining } = parseNameSegment(str, '', substitutions);
 		if (!segment) return { name: '', str, isConst: false, templateArgs: [] };
 
-		const { args, str: after } = parseTemplateArgs(remaining, []);
+		const { args, str: after } = parseTemplateArgs(remaining, substitutions);
 		if (args && args.length > 0) {
 			const templateType = new TemplateType(segment, args);
 			const visitor = new FormatVisitor();
@@ -440,9 +480,10 @@ function parseEncodedName(str) {
 	let remaining = str.slice(1);
 	const { isConst, remaining: afterConst } = parseConstQualifier(remaining);
 	const { segments: stdSegments, remaining: afterStd } = parseStdPrefix(str, afterConst);
-	const { segments, remaining: afterSegments } = parseNamespaceSegments(afterStd, stdSegments);
+	const { segments, remaining: afterSegments, templateArgs } =
+		parseNamespaceSegments(afterStd, stdSegments, substitutions);
 	const finalRemaining = afterSegments[0] === 'E' ? afterSegments.slice(1) : afterSegments;
-	return { name: segments.join('::'), str: finalRemaining, isConst, templateArgs: [] };
+	return { name: segments.join('::'), str: finalRemaining, isConst, templateArgs };
 }
 
 function parseArgsUntil(remaining, endChar, parseArgFn) {
@@ -459,13 +500,7 @@ function parseArgsUntil(remaining, endChar, parseArgFn) {
 function parseTemplateArgs(str, substitutions = []) {
 	if (str[0] !== 'I') return { args: null, str };
 
-	const isLengthPrefixed = str[1] && /\d/.test(str[1]);
-	const parseArgFn = isLengthPrefixed
-		? (remaining) => {
-			const { value, remaining: after } = parseLengthPrefixed(remaining);
-			return { typeNode: value ? new NamedType(value) : null, remaining: after };
-		}
-		: (remaining) => parseSingleType(remaining, substitutions, []);
+	const parseArgFn = (remaining) => parseSingleType(remaining, substitutions, []);
 
 	return parseArgsUntil(str.slice(1), 'E', parseArgFn);
 }
@@ -587,7 +622,7 @@ function parseTemplateParam(str, templateParams = []) {
 
 	const match = /^(\d+)_/.exec(str);
 	if (match) {
-		const index = parseInt(match[1], 10);
+		const index = parseInt(match[1], 10) + 1;
 		const typeNode = index < templateParams.length ? templateParams[index] : null;
 		return { typeNode, str: str.slice(match[0].length) };
 	}
@@ -611,12 +646,12 @@ function parseStdType(str, substitutions = []) {
 
 	const subMatch = /^(\d+)_/.exec(str);
 	if (subMatch) {
-		const index = parseInt(subMatch[1], 10);
+		const index = parseInt(subMatch[1], 10) + 1;
 		return { typeNode: substitutions[index], str: str.slice(subMatch[0].length) };
 	}
 
 	if (str[0] === 't') {
-		const { name, str: remaining } = parseEncodedName(str.slice(1));
+		const { name, str: remaining } = parseEncodedName(str.slice(1), substitutions);
 		const typeNode = new NamedType(`std::${name}`);
 		return { typeNode, str: remaining };
 	}
@@ -627,7 +662,7 @@ function parseStdType(str, substitutions = []) {
 	}
 
 	if (!isNaN(parseInt(str[0], 10))) {
-		const { name, str: remaining } = parseEncodedName(str);
+		const { name, str: remaining } = parseEncodedName(str, substitutions);
 		const typeNode = new NamedType(`std::${name}`);
 		return { typeNode, str: remaining };
 	}
@@ -754,10 +789,9 @@ const TYPE_PARSERS = [
 	{
 		matches: (char) => !isNaN(parseInt(char, 10)) || char === 'N',
 		parse: (ctx) => {
-			const { name, str } = parseEncodedName(ctx.char + ctx.remaining);
+			const { name, str } = parseEncodedName(ctx.char + ctx.remaining, ctx.substitutions);
 			const baseType = new NamedType(name);
 			const typeNode = new QualifiedType(baseType, ctx.qualifiers);
-			ctx.substitutions.push(typeNode);
 			return { typeNode, remaining: str };
 		}
 	},
